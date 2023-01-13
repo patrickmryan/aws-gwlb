@@ -9,6 +9,7 @@ from aws_cdk import (
     aws_autoscaling as autoscaling,
 )
 from constructs import Construct
+import boto3
 
 
 class CiscoSecureGwlbStack(Stack):
@@ -48,6 +49,8 @@ class CiscoSecureGwlbStack(Stack):
 
         Tags.of(self).add("APPLIANCE", "TEST")
 
+        ec2_resource = boto3.resource("ec2")
+
         vpc_name = self.node.try_get_context("VpcName")
         gwlb_subnet_name = "CHARLIE"
         asg_subnet = "DELTA"
@@ -60,11 +63,55 @@ class CiscoSecureGwlbStack(Stack):
             sys.exit(1)
 
         vpc_id = vpc.vpc_id
-        # print(vpc_id)
+        intra_vpc = ec2.Peer.ipv4(vpc.vpc_cidr_block)
+
+        vpc_resource = ec2_resource.Vpc(vpc_id)
+
+        subnets_dict = {}
+        for subnet in vpc_resource.subnets.all():
+            name_tag = next(
+                (tag for tag in subnet.tags if tag["Key"] == "CWALL_ROLE"), None
+            )
+            subnet_name = name_tag["Value"]
+            if subnet_name not in subnets_dict:
+                subnets_dict[subnet_name] = []
+            subnets_dict[subnet_name].append(subnet.id)
+
+        gwlb_subnet_ids = subnets_dict[gwlb_subnet_name]
+
+        template_sg = ec2.SecurityGroup(self, "GeneveProxySG", vpc=vpc)
+        geneve_port = 6081
+        template_sg.connections.allow_from(
+            ec2.Peer.any_ipv4(), ec2.Port.tcp(geneve_port)
+        )
+        template_sg.connections.allow_from(intra_vpc, ec2.Port.tcp(22))
 
         # IAM policies
         # security group(s)
         # launch template
+
+        ami = ec2.MachineImage.lookup(name="AL2-GeneveProxy")
+
+        # role
+        # enable CW logs access
+
+        launch_template = ec2.LaunchTemplate(
+            self,
+            "GeneveProxyServer",
+            instance_type=ec2.InstanceType.of(
+                ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.SMALL
+            ),
+            machine_image=ami,
+            block_devices=[
+                ec2.BlockDevice(
+                    device_name="/dev/xvda",
+                    volume=ec2.BlockDeviceVolume.ebs(40, delete_on_termination=True),
+                )
+            ],
+            # role
+            security_group=template_sg,
+            # user_data=user_data,
+        )
 
         # INGRESS route to GWLBE
         # put GWLBEs in CHARLIE

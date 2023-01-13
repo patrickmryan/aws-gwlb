@@ -149,5 +149,6 @@
         ]
       }
     ]
-  }
+  },
+  "ami:account=286367598331:filters.image-type.0=machine:filters.name.0=AL2-GeneveProxy:filters.state.0=available:region=us-east-1": "ami-020a3162e09801a69"
 }
