@@ -1,4 +1,5 @@
 import sys
+from os.path import join
 from aws_cdk import (
     Duration,
     Stack,
@@ -7,6 +8,8 @@ from aws_cdk import (
     aws_iam as iam,
     aws_elasticloadbalancingv2 as elbv2,
     aws_autoscaling as autoscaling,
+    aws_lambda as _lambda,
+    aws_logs as logs,
 )
 from constructs import Construct
 import boto3
@@ -111,6 +114,47 @@ class CiscoSecureGwlbStack(Stack):
             # role
             security_group=template_sg,
             # user_data=user_data,
+        )
+
+        # setting for all python Lambda functions
+        runtime = _lambda.Runtime.PYTHON_3_9
+        lambda_root = "lambda"
+        log_retention = logs.RetentionDays.ONE_WEEK
+        lambda_principal = iam.ServicePrincipal("lambda.amazonaws.com")
+
+        basic_lambda_policy = iam.ManagedPolicy.from_aws_managed_policy_name(
+            "service-role/AWSLambdaVPCAccessExecutionRole"
+        )
+
+        service_role = iam.Role(
+            self,
+            "VpceServiceLambdaExecutionRole",
+            assumed_by=lambda_principal,
+            managed_policies=[basic_lambda_policy],
+            inline_policies={
+                "ec2read": iam.PolicyDocument(
+                    assign_sids=True,
+                    statements=[
+                        iam.PolicyStatement(
+                            actions=["ec2:DescribeVpcEndpointServiceConfigurations"],
+                            effect=iam.Effect.ALLOW,
+                            resources=["*"],  # maybe narrower
+                        ),
+                    ],
+                )
+            },
+        )
+
+        vpce_service_lambda = _lambda.Function(
+            self,
+            "VpceServiceLambda",
+            runtime=runtime,
+            code=_lambda.Code.from_asset(join(lambda_root, "vpce_service")),
+            handler="vpce_service.lambda_handler",
+            # environment={**debug_env},
+            timeout=Duration.seconds(150),
+            role=service_role,
+            log_retention=log_retention,
         )
 
         # INGRESS route to GWLBE
