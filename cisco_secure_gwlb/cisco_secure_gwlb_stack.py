@@ -1,9 +1,12 @@
 import sys
 from os.path import join
+from typing import List, Union, Sequence
 from aws_cdk import (
     Duration,
     Stack,
     Tags,
+    # ResolutionTypeHint,
+    IResolvable,
     aws_ec2 as ec2,
     aws_iam as iam,
     aws_elasticloadbalancingv2 as elbv2,
@@ -156,6 +159,32 @@ class CiscoSecureGwlbStack(Stack):
             role=service_role,
             log_retention=log_retention,
         )
+
+        gwlb = elbv2.CfnLoadBalancer(
+            self,
+            "GatewayLoadBalancer",
+            name=f"GWLB-{self.stack_name}",
+            type="gateway",
+            subnets=gwlb_subnet_ids,
+            scheme="internal",
+            load_balancer_attributes=[
+                elbv2.CfnLoadBalancer.LoadBalancerAttributeProperty(
+                    key="load_balancing.cross_zone.enabled", value="true"
+                )
+            ],
+        )
+
+        arns: Sequence[Union[str, IResolvable]] = [gwlb.get_att("Arn")]
+
+        gw_endpoint_service = ec2.CfnVPCEndpointService(
+            self,
+            "VPCEndpointService",
+            acceptance_required=False,
+            gateway_load_balancer_arns=arns,  # [gwlb.get_att("Arn")],
+        )
+        # gw_endpoint_service = ec2.VpcEndpointService(self, "EndpointService",
+        #     gateway_load_balancers=[gwlb],
+        #     acceptance_required=False)
 
         # INGRESS route to GWLBE
         # put GWLBEs in CHARLIE
