@@ -1,0 +1,693 @@
+#
+# Copyright (c) 2021 Amazon Web Services, Inc. All Rights Reserved.
+# This AWS content is subject to the terms of the Basic Ordering
+# Agreement Contract No. 2018-17120800001/Order No. 008.
+#
+
+AWSTemplateFormatVersion: "2010-09-09"
+
+Transform: AWS::Serverless-2016-10-31
+
+Mappings:
+  AMIMap:
+    us-east-1:
+      PA1011: ami-0c0207f072032fb76
+      PA1007: ami-050dacd16a6775bea
+      PA1000: ami-04d797af2d3326de3 # 10.0
+      TEST: ami-09d3b3274b6c5d4aa # linux
+    us-east-2:
+      PA1011: ami-0d027e18df1f6a15a
+      PA1007: ami-0285adbb6cf2f52c3
+      PA1000: ami-05828d225da871727 # 10.0
+      TEST: ami-074cce78125f09d61 # linux
+    us-west-1:
+      PA1011: ami-0aa59fba8494b026a
+      PA1007: ami-0131842ffe06675d9
+      PA1000: ami-0c07993abac01bea6 # 10.0
+    us-west-2:
+      PA1011: ami-0d86d95dbb8914e48
+      PA1007: ami-01ec09e9bec6c5ac4
+      PA1000: ami-0c68139edc69dda58 # 10.0
+
+  TypeMap:
+    InstanceType:
+      TEST: t2.micro
+      PA1011: m4.2xlarge
+      PA1007: m4.2xlarge
+      PA1000: m4.2xlarge
+
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      # - Label:
+      #     default: Deployment
+      #   Parameters:
+      #     - PAVersion
+      #     - LambdaSubnets
+      - Label:
+          default: Management information
+        Parameters:
+          - InterfaceVpcId
+          - DataSubnets
+          # - PanoramaIp
+          # - PanoRESTUsername
+
+Parameters:
+  InterfaceVpcId:
+    Type: AWS::EC2::VPC::Id
+  # LambdaSubnets:
+  #   Type: List<AWS::EC2::Subnet::Id>
+  DataSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  MissionCidr:
+    Type: String
+    Default: 10.0.0.0/8
+  # PanoramaIp:
+  #   Type: String
+  # PanoRESTUsername:
+  #   Type: String
+  #   Default: devicemanager
+  # PAVersion:
+  #   Type: String
+  #   Default: PA1007
+  #   AllowedValues:
+  #     - PA1000
+  #     - PA1007
+  #     - PA1011
+  #     - TEST
+  # InterfaceType:
+  #   Type: String
+  #   AllowedValues:
+  #     - bronze
+  #     - silver
+  #     - gold
+  RoleNamePrefix:
+    Type: String
+    Default: PROJECT_
+  PAVMKeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+  # PaloAltoDeviceGroup:
+  #   Type: String
+  #   # Default: silver
+  # PaloAltoBootstrapBucket:
+  #   Type: String
+
+Resources:
+  # Store information about the running system. Used for HA.
+  # ConfigurationSSMparameter:
+  #   Type: AWS::SSM::Parameter
+  #   Properties:
+  #     Description: Silver CI runtime info
+  #     Name: !Sub "cwall-palo-alto-${AWS::StackName}"
+  #     Type: String
+  #     Value: !Sub |
+  #       {
+  #         "vpc_id":  "${InterfaceVpcId}",
+  #         "ci_type": "silver",
+  #         "panorama_ip": "${PanoramaIp}",
+  #         "device_group": "${PaloAltoDeviceGroup}",
+  #         "asg_name": "PAVM-ASG-${AWS::Region}-${AWS::StackName}",
+  #         "mgmt_subnet_tag": "MANAGEMENT",
+  #         "data_subnet_tag": "CHARLIE",
+  #         "mgmt_security_group_tag": "MANAGEMENT",
+  #         "data_security_group_tag": "UNRESTRICTED"
+  #       }
+
+
+  # PanoramaCredentialsSecret:
+  #   Type: AWS::SecretsManager::Secret
+  #   Properties:
+  #     Name: !Sub "pano-credentials-${AWS::StackName}"
+  #     Description: "Username and password used for access to the PAN-OS REST API"
+  #     SecretString: !Sub '{ "username": "${PanoRESTUsername}", "password": "ENTER_PASSWORD_HERE" }' # pragma: allowlist secret
+
+  DataInterfaceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Traffic to the data interface
+      VpcId: !Ref InterfaceVpcId
+      # restrict this to only 6081 (GENEVE) and 80 (health check)
+      # probably should only see traffic from within the VPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80   # health check
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 6081   # GENEVE
+          ToPort: 6081
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName} - PAVM data interface"
+        - Key: CWALL_ROLE
+          Value: DATA
+
+  PAVMLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: ami-020a3162e09801a69
+        InstanceType: t2.micro
+        IamInstanceProfile:
+          Arn: !GetAtt PAVMInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref DataInterfaceSecurityGroup
+        KeyName: !Ref PAVMKeyPair
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${AWS::StackName}"
+        # https://docs.paloaltonetworks.com/vm-series/10-1/vm-series-deployment/bootstrap-the-vm-series-firewall/choose-a-bootstrap-method.html
+        #
+        # https://docs.paloaltonetworks.com/vm-series/10-0/vm-series-deployment/bootstrap-the-vm-series-firewall/create-the-init-cfgtxt-file/sample-init-cfgtxt-file.html
+        # UserData:
+        #   Fn::Base64:
+        #     Fn::Join:
+        #       - ';'
+        #       - - 'mgmt-interface-swap=enable'
+        #         - !Sub 'vmseries-bootstrap-aws-s3bucket=${PaloAltoBootstrapBucket}'
+
+  # reused some resources from https://github.com/aws-samples/aws-gateway-load-balancer-code-samples/blob/main/aws-cloudformation/centralized_architecture/CentralizedArchitectureApplianceVpc2Az.yaml
+  #
+  # Lambda creates CloudWatch Log Group.
+  # Since CF stack didn't explicitly create the Log Group, Log Group doesn't get deleted when stack is deleted.
+  # Hence creating Log Group though the stack for Lambda specific funciton.
+  # Their are few things to consider. For more details refer to: https://github.com/aws/serverless-application-model/issues/1216
+  VpceServiceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+        LogGroupName: !Sub /aws/lambda/${AWS::StackName}-vpce-service
+        RetentionInDays: 1
+
+  VpceServiceName:
+    Type: AWS::Lambda::Function
+    DependsOn: VpceServiceLogGroup
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-vpce-service
+      Handler: "index.handler"
+      Role: !GetAtt VpceServiceLambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import time
+
+          import boto3
+          import cfnresponse
+          from botocore.exceptions import ClientError
+
+          try:
+              ec2 = boto3.client('ec2')
+          except ClientError as e:
+              logger.error(f"ERROR: failed to connect to EC2 client: {e}")
+              sys.exit(1)
+
+          def handler(event, context):
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              logger.info('Received event: {}'.format(json.dumps(event)))
+
+              responseData = {}
+              responseStatus = cfnresponse.FAILED
+
+              try:
+                  serviceid = event["ResourceProperties"]["VpceServiceId"]
+              except Exception as e:
+                  logger.info('Attribute retrival failure: {}'.format(e))
+
+              try:
+                  if event["RequestType"] == "Delete":
+                      responseStatus = cfnresponse.SUCCESS
+                      cfnresponse.send(event, context, responseStatus, responseData)
+              except Exception:
+                  logger.exception("Signaling failure to CloudFormation.")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+              if event["RequestType"] == "Create":
+                  logger.info("Retrieving VPC Endpoint Service Name:")
+                  try:
+                      response = ec2.describe_vpc_endpoint_service_configurations(
+                          Filters=[
+                              {
+                                  'Name': 'service-id',
+                                  'Values': [serviceid]
+                              }
+                          ]
+                      )
+                  except Exception as e:
+                      logger.info('ec2.describe_vpc_endpoint_service_configurations failure: {}'.format(e))
+
+                  service_name = response['ServiceConfigurations'][0]['ServiceName']
+
+                  time.sleep(120)
+
+                  responseData['ServiceName'] = service_name
+                  responseStatus = cfnresponse.SUCCESS
+                  cfnresponse.send(event, context, responseStatus, responseData)
+      Runtime: python3.7
+      Timeout: 150
+
+  VpceServiceLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${RoleNamePrefix}retrieve_name_${AWS::StackName}'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEC2FullAccess'
+
+  PAVMGatewayLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      # Name: !Sub 'PAVM-GWLB-${AWS::StackName}'
+      Name: !Sub 'PA-${AWS::StackName}'
+      Type: gateway
+      # Scheme: internal
+      Subnets: !Ref DataSubnets
+      LoadBalancerAttributes:
+        # - Key: deletion_protection.enabled
+        #   Value: true
+        - Key: load_balancing.cross_zone.enabled
+          Value: true
+
+  PAVMGatewayEndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      AcceptanceRequired: false
+      GatewayLoadBalancerArns:
+        - !Ref PAVMGatewayLoadBalancer
+
+  RetrieveVpceServiceName:
+    Type: Custom::RetrieveAttributes
+    Properties:
+      ServiceToken: !GetAtt VpceServiceName.Arn
+      VpceServiceId: !Ref PAVMGatewayEndpointService
+
+  PAVMGatewayEndpoint1:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: GatewayLoadBalancer
+      ServiceName: !GetAtt RetrieveVpceServiceName.ServiceName
+      SubnetIds:
+        - !Select [ 0, !Ref DataSubnets ]
+      VpcEndpointType: GatewayLoadBalancer
+      VpcId: !Ref InterfaceVpcId
+
+  PAVMGatewayEndpoint2:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: GatewayLoadBalancer
+      ServiceName: !GetAtt RetrieveVpceServiceName.ServiceName
+      SubnetIds:
+        - !Select [ 1, !Ref DataSubnets ]
+      VpcEndpointType: GatewayLoadBalancer
+      VpcId: !Ref InterfaceVpcId
+
+  # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html
+  PAVMTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      # Name: String
+      HealthCheckEnabled: true
+      # HealthCheckIntervalSeconds: 10
+      HealthCheckPort: 80
+      HealthCheckProtocol: TCP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      Port: 6081
+      Protocol: GENEVE
+      TargetType: instance
+      UnhealthyThresholdCount: 3
+      VpcId: !Ref InterfaceVpcId
+      # Tags:
+      #   - Tag
+
+  PAVMListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PAVMTargetGroup
+      LoadBalancerArn: !Ref PAVMGatewayLoadBalancer
+
+  PAVMAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    # This DependsOn clause is super-important. Without it, the ASG will start spinning up
+    # instances before the hooks are set up.
+    # DependsOn:
+    #   - PAVMLaunchingEventRule
+    #   - PAVMTerminatingEventRule
+    Properties:
+      AutoScalingGroupName: !Sub "PAVM-ASG-${AWS::Region}-${AWS::StackName}"
+      Cooldown: 60
+      DesiredCapacity: 0
+      HealthCheckGracePeriod: 60
+      HealthCheckType: EC2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref PAVMLaunchTemplate
+        Version: !GetAtt PAVMLaunchTemplate.DefaultVersionNumber
+      MaxSize: 2
+      MinSize: 0
+      VPCZoneIdentifier: !Ref DataSubnets
+      NotificationConfigurations:
+        - TopicARN: !Ref ScalingEventTopic
+          NotificationTypes:
+            - autoscaling:EC2_INSTANCE_LAUNCH
+            - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+            - autoscaling:EC2_INSTANCE_TERMINATE
+            - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+      # LifecycleHookSpecificationList:
+      #   - LifecycleTransition: autoscaling:EC2_INSTANCE_LAUNCHING
+      #     LifecycleHookName: !Sub "PAVM-launching-hook-${AWS::StackName}"
+      #     DefaultResult: ABANDON
+      #     HeartbeatTimeout: 180  #900 #1200 # PAVM init should take 15-20 min
+      #     NotificationMetadata: !Ref ConfigurationSSMparameter
+      #   - LifecycleTransition: autoscaling:EC2_INSTANCE_TERMINATING
+      #     LifecycleHookName: !Sub "PAVM-terminating-hook-${AWS::StackName}"
+      #     DefaultResult: CONTINUE
+      #     HeartbeatTimeout: 120 # PAVM deregistration should be quick
+      #     NotificationMetadata: !Ref ConfigurationSSMparameter
+      TargetGroupARNs:
+        - !Ref PAVMTargetGroup
+
+  ScalingEventTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'pavm-asg-scaling-topic-${AWS::StackName}'
+
+  # policy to enable ASG to public to topic
+  AllowASGToPublishToSNS:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref ScalingEventTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action:
+            - sns:Publish
+            Resource: !Ref ScalingEventTopic
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "PAVM-ASG-${AWS::Region}-${AWS::StackName}"
+
+  # PAVMLaunchingEventRule:
+  #   Type: AWS::Events::Rule
+  #   Properties:
+  #     EventPattern:
+  #       source:
+  #         - aws.autoscaling
+  #       detail:
+  #         LifecycleTransition:
+  #           - autoscaling:EC2_INSTANCE_LAUNCHING
+  #         AutoScalingGroupName:
+  #           - !Sub "PAVM-ASG-${AWS::Region}-${AWS::StackName}"
+  #     Targets:
+  #       - Id: CloudWatchEventTarget
+  #         Arn: !GetAtt instanceLaunchHook.Arn
+  #     State: ENABLED
+
+  # enable the CW event to invoke lambda
+  # LaunchEventPermissionForEventsToInvokeLambda:
+  #   Type: AWS::Lambda::Permission
+  #   Properties:
+  #     FunctionName: !GetAtt instanceLaunchHook.Arn
+  #     Action: lambda:InvokeFunction
+  #     Principal: events.amazonaws.com
+  #     SourceArn: !GetAtt PAVMLaunchingEventRule.Arn
+
+  # PAVMTerminatingEventRule:
+  #   Type: AWS::Events::Rule
+  #   Properties:
+  #     EventPattern:
+  #       source:
+  #         - aws.autoscaling
+  #       detail:
+  #         LifecycleTransition:
+  #           - autoscaling:EC2_INSTANCE_TERMINATING
+  #         AutoScalingGroupName:
+  #           - !Sub "PAVM-ASG-${AWS::Region}-${AWS::StackName}"
+  #     Targets:
+  #       - Id: CloudWatchEventTarget
+  #         Arn: !GetAtt instanceTerminateHook.Arn
+  #     State: ENABLED
+
+  # enable the CW event to invoke lambda
+  # TerminateEventPermissionForEventsToInvokeLambda:
+  #   Type: AWS::Lambda::Permission
+  #   Properties:
+  #     FunctionName: !GetAtt instanceTerminateHook.Arn
+  #     Action: lambda:InvokeFunction
+  #     Principal: events.amazonaws.com
+  #     SourceArn: !GetAtt PAVMTerminatingEventRule.Arn
+
+  # security group enabling all outbound access. for lambda.
+  PAVMLifecycleHookLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound only access
+      VpcId: !Ref InterfaceVpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+
+  # # state machine
+  # PAVMInitializingStateMachine:
+  #   Type: AWS::Serverless::StateMachine
+  #   Properties:
+  #     Name: !Sub "PAVMInitializingStateMachine-${AWS::StackName}"
+  #     DefinitionUri: pavm-configure-sfn.json
+  #     DefinitionSubstitutions:
+  #       addInterfaces: !GetAtt addInterfaces.Arn
+  #       configureDevice: !GetAtt configureDevice.Arn
+  #       completeHook: !GetAtt completeHook.Arn
+  #       checkReadiness: !GetAtt checkReadiness.Arn
+  #     Role: !GetAtt PAVMStepFunctionRoleManaged.Arn
+
+  # # lambdas for the step function
+  # instanceLaunchHook:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     CodeUri: source/PAVMInstanceLaunchHook/
+  #     FunctionName: !Sub "instanceLaunchHook-${AWS::StackName}"
+  #     Handler: instanceLaunchHook.lambda_handler
+  #     Role: !GetAtt PAVMLifecycleLambdaRoleManaged.Arn
+  #     Runtime: python3.8
+  #     Timeout: 300
+  #     VpcConfig:
+  #       SubnetIds: !Ref LambdaSubnets
+  #       SecurityGroupIds:
+  #         - !Ref PAVMLifecycleHookLambdaSecurityGroup
+  #     Environment:
+  #       Variables:
+  #         PAVM_LAUNCH_STATE_MACHINE_ARN: !GetAtt PAVMInitializingStateMachine.Arn
+
+  # instanceTerminateHook:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     CodeUri: source/PAVMInstanceTerminateHook/
+  #     FunctionName: !Sub "instanceTerminateHook-${AWS::StackName}"
+  #     Handler: instanceTerminateHook.lambda_handler
+  #     Role: !GetAtt PAVMLifecycleLambdaRoleManaged.Arn
+  #     Runtime: python3.8
+  #     Timeout: 300
+  #     VpcConfig:
+  #       SubnetIds: !Ref LambdaSubnets
+  #       SecurityGroupIds:
+  #         - !Ref PAVMLifecycleHookLambdaSecurityGroup
+
+  # completeHook:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     CodeUri: source/PAVMCompleteHook/
+  #     FunctionName: !Sub "completeHook-${AWS::StackName}"
+  #     Handler: completeHook.lambda_handler
+  #     Role: !GetAtt PAVMLifecycleLambdaRoleManaged.Arn
+  #     Runtime: python3.8
+  #     Timeout: 300
+  #     VpcConfig:
+  #       SubnetIds: !Ref LambdaSubnets
+  #       SecurityGroupIds:
+  #         - !Ref PAVMLifecycleHookLambdaSecurityGroup
+
+  # addInterfaces:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     CodeUri: source/PAVMAddInterfaces/
+  #     FunctionName: !Sub "addInterfaces-${AWS::StackName}"
+  #     Handler: addInterfaces.lambda_handler
+  #     Role: !GetAtt PAVMLifecycleLambdaRoleManaged.Arn
+  #     Runtime: python3.8
+  #     Timeout: 60
+  #     VpcConfig:
+  #       SubnetIds: !Ref LambdaSubnets
+  #       SecurityGroupIds:
+  #         - !Ref PAVMLifecycleHookLambdaSecurityGroup
+
+  # checkReadiness:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     CodeUri: source/PAVMCheckReadiness/
+  #     FunctionName: !Sub "checkReadiness-${AWS::StackName}"
+  #     Handler: checkReadiness.lambda_handler
+  #     Role: !GetAtt PAVMLifecycleLambdaRoleManaged.Arn
+  #     Runtime: python3.8
+  #     Layers:
+  #       - !Ref PANOSLambdaLayer
+  #     Timeout: 90
+  #     VpcConfig:
+  #       SubnetIds: !Ref LambdaSubnets
+  #       SecurityGroupIds:
+  #         - !Ref PAVMLifecycleHookLambdaSecurityGroup
+
+  # configureDevice:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     CodeUri: source/PAVMConfigureDevice/
+  #     FunctionName: !Sub "configureDevice-${AWS::StackName}"
+  #     Handler: configureDevice.lambda_handler
+  #     Role: !GetAtt PAVMLifecycleLambdaRoleManaged.Arn
+  #     Runtime: python3.8
+  #     Timeout: 120
+  #     Layers:
+  #       - !Ref PANOSLambdaLayer
+  #     VpcConfig:
+  #       SubnetIds: !Ref LambdaSubnets
+  #       SecurityGroupIds:
+  #         - !Ref PAVMLifecycleHookLambdaSecurityGroup
+  #     Environment:
+  #       Variables:
+  #         PANORAMA_SECRET: !Ref PanoramaCredentialsSecret
+
+  # PANOSLambdaLayer:
+  #   # https://pan-os-python.readthedocs.io/en/latest/readme.html#install
+  #   Type: AWS::Serverless::LayerVersion
+  #   Properties:
+  #     Description: Layer for PAN-OS API calls
+  #     CompatibleRuntimes:
+  #       - python3.8
+  #     ContentUri: panos.zip
+  #     LayerName: !Sub "panos-${AWS::StackName}"
+  #     RetentionPolicy: Delete
+
+
+  # #### roles
+
+  # PAVMLifecycleLambdaRoleManaged:
+  #   Type: AWS::IAM::Role
+  #   # Condition: UseManagedPolicies
+  #   Properties:
+  #     RoleName: !Sub '${RoleNamePrefix}pavm_lifecycle_${AWS::StackName}'
+  #     # PermissionsBoundary:
+  #     #   Fn::If:
+  #     #   - HasPermissionsBoundary
+  #     #   - Ref: PermissionsBoundaryPolicyArn
+  #     #   - Ref: AWS::NoValue
+  #     Path: /
+  #     AssumeRolePolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service:
+  #             - lambda.amazonaws.com
+  #           Action:
+  #             - 'sts:AssumeRole'
+  #     ManagedPolicyArns:
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaRole'
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEC2FullAccess'
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMFullAccess'
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AWSStepFunctionsFullAccess'
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/SecretsManagerReadWrite'
+
+  # PAVMStepFunctionRoleManaged:
+  #   Type: AWS::IAM::Role
+  #   # Condition: UseManagedPolicies
+  #   Properties:
+  #     Description: Allows step function to call Lambda
+  #     RoleName: !Sub '${RoleNamePrefix}pavm_sfn_${AWS::StackName}'
+  #     # PermissionsBoundary:
+  #     #   Fn::If:
+  #     #   - HasPermissionsBoundary
+  #     #   - Ref: PermissionsBoundaryPolicyArn
+  #     #   - Ref: AWS::NoValue
+  #     AssumeRolePolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service:
+  #             - states.amazonaws.com
+  #           Action:
+  #             - 'sts:AssumeRole'
+  #     Path: /
+  #     ManagedPolicyArns:
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AWSLambdaExecute'
+  #       - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaRole'
+
+  PAVMInstanceRoleManaged:
+    Type: AWS::IAM::Role
+    # Condition: UseManagedPolicies
+    Properties:
+      RoleName: !Sub '${RoleNamePrefix}syslog_${AWS::StackName}'
+      # PermissionsBoundary:
+      #   Fn::If:
+      #   - HasPermissionsBoundary
+      #   - Ref: PermissionsBoundaryPolicyArn
+      #   - Ref: AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMFullAccess'  # need to create read-only version of this
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/SecretsManagerReadWrite'
+        # - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/AmazonEC2ReadOnlyAccess'
+
+  PAVMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${RoleNamePrefix}pavm_profile_${AWS::StackName}'
+      Path: /
+      Roles:
+        - !Ref PAVMInstanceRoleManaged
+
+
+Outputs:
+  PAVMGatewayEndpoint1:
+    Value: !Ref PAVMGatewayEndpoint1
+  PAVMGatewayEndpoint2:
+    Value: !Ref PAVMGatewayEndpoint2
