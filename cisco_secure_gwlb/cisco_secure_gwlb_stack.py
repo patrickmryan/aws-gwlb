@@ -1,6 +1,8 @@
 import sys
 from os.path import join
-from typing import List, Union, Sequence
+
+# from typing import Union, Sequence
+import typing
 from aws_cdk import (
     Duration,
     Stack,
@@ -174,17 +176,19 @@ class CiscoSecureGwlbStack(Stack):
             ],
         )
 
-        arns: Sequence[Union[str, IResolvable]] = [gwlb.get_att("Arn")]
-
         gw_endpoint_service = ec2.CfnVPCEndpointService(
             self,
             "VPCEndpointService",
             acceptance_required=False,
-            gateway_load_balancer_arns=arns,  # [gwlb.get_att("Arn")],
+            # gateway_load_balancer_arns= typing.cast(typing.Sequence, [gwlb.get_att("Arn")]),
+            gateway_load_balancer_arns=[gwlb.get_att("Arn")],
         )
-        # gw_endpoint_service = ec2.VpcEndpointService(self, "EndpointService",
-        #     gateway_load_balancers=[gwlb],
-        #     acceptance_required=False)
+
+        # gw_endpoint_service = ec2.VpcEndpointService(self,
+        #     "VPCEndpointService",
+        #     acceptance_required=False,
+        #     vpc_endpoint_service_load_balancers=[gwlb.get_att("Arn")],
+        # )
 
         # INGRESS route to GWLBE
         # put GWLBEs in CHARLIE
