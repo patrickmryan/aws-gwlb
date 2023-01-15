@@ -226,8 +226,9 @@ class GwlbStack(Stack):
         )
 
         # create the VPC endpoints
+        vpc_endpoints = {}
         for az in vpc.availability_zones:
-            ec2.CfnVPCEndpoint(
+            vpc_endpoints[az] = ec2.CfnVPCEndpoint(
                 self,
                 f"VPCE-{az}",
                 vpc_id=vpc.vpc_id,
@@ -254,6 +255,24 @@ class GwlbStack(Stack):
             vpc_id=vpc.vpc_id,
         )
 
+        asg = autoscaling.AutoScalingGroup(
+            self,
+            "ASG",
+            auto_scaling_group_name=f"GWLB-ASG-{self.stack_name}",
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(
+                subnets=(vpc.select_subnets(subnet_group_name="APPLIANCE")).subnets
+            ),
+            launch_template=launch_template,
+            cooldown=Duration.minutes(1),
+            desired_capacity=0,  # zero for a reason
+            min_capacity=0,
+            health_check=autoscaling.HealthCheck.ec2(grace=Duration.minutes(1)),
+            group_metrics=[autoscaling.GroupMetrics.all()],
+            update_policy=autoscaling.UpdatePolicy.rolling_update(),
+        )
+        asg.attach_to_network_target_group(target_group)
+
         listener = elbv2.CfnListener(
             self,
             "GWLBListener",
@@ -265,14 +284,45 @@ class GwlbStack(Stack):
             load_balancer_arn=gwlb.ref,  # get_att('Arn')
         )
 
+        # routes:
+        #  trusted:  default to VPCE per AZ
+        #  edge: subnet CIDR to VPCE per AZ
 
-#   PAVMListener:
-#     Type: AWS::ElasticLoadBalancingV2::Listener
-#     Properties:
-#       DefaultActions:
-#         - Type: forward
-#           TargetGroupArn: !Ref PAVMTargetGroup
-#       LoadBalancerArn: !Ref PAVMGatewayLoadBalancer
+        edge_route_table = ec2.CfnRouteTable(self, "EdgeRouteTable", vpc_id=vpc.vpc_id)
+
+        for az, vpce in vpc_endpoints.items():
+
+            subnets = (
+                vpc.select_subnets(
+                    subnet_group_name="APPLIANCE", availability_zones=[az]
+                )
+            ).subnets
+            # for subnet in subnets:
+            for n in range(len(subnets)):
+                # add the outbound route
+                subnets[n].add_route(
+                    f"DefaultRouteFor-{az}-subnet-{n}",
+                    router_id=vpce.ref,
+                    router_type=ec2.RouterType.VPC_ENDPOINT,
+                    destination_cidr_block="0.0.0.0/0",
+                )
+                # add a return route to the edge route table
+                ec2.CfnRoute(
+                    self,
+                    f"EdgeRoute-{az}",
+                    route_table_id=edge_route_table.attr_route_table_id,
+                    vpc_endpoint_id=vpce.ref,
+                    destination_cidr_block=subnets[n].ipv4_cidr_block,
+                )
+
+        # attach the edge route table to the VPC so that return traffic is
+        # sent back to the GWLB
+        ec2.CfnGatewayRouteTableAssociation(
+            self,
+            "EdgeRouteTableAssociation",
+            route_table_id=edge_route_table.attr_route_table_id,
+            gateway_id=vpc.internet_gateway_id,
+        )
 
 
 # INGRESS route to GWLBE
