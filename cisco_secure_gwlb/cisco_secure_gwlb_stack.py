@@ -180,20 +180,13 @@ class CiscoSecureGwlbStack(Stack):
             self,
             "VPCEndpointService",
             acceptance_required=False,
-            # gateway_load_balancer_arns= typing.cast(typing.Sequence, [gwlb.get_att("Arn")]),
-            gateway_load_balancer_arns=[gwlb.get_att("Arn")],
+            gateway_load_balancer_arns=[gwlb.ref],
         )
-
-        # gw_endpoint_service = ec2.VpcEndpointService(self,
-        #     "VPCEndpointService",
-        #     acceptance_required=False,
-        #     vpc_endpoint_service_load_balancers=[gwlb.get_att("Arn")],
-        # )
 
         # INGRESS route to GWLBE
         # put GWLBEs in CHARLIE
         # put instances in DELTA
-        # EGRESS default route to IGW, private CIDR route to GWLBE
+        # EGRESS default route to IGW, private CIDR route to GWLBE (edge route table)
 
         # extract the named subnets from the VPC
 
