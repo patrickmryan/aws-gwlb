@@ -240,16 +240,39 @@ class GwlbStack(Stack):
                 service_name=retrieve_vpce_service_name.get_att_string("ServiceName"),
             )
 
+        target_group = elbv2.CfnTargetGroup(
+            self,
+            "GWLBTargetGroup",
+            health_check_enabled=True,
+            health_check_port="80",
+            health_check_protocol="TCP",
+            health_check_timeout_seconds=5,
+            healthy_threshold_count=3,
+            port=geneve_port,
+            target_type="instance",
+            unhealthy_threshold_count=3,
+            vpc_id=vpc.vpc_id,
+        )
 
-#   PAVMGatewayEndpoint1:
-#     Type: AWS::EC2::VPCEndpoint
+        listener = elbv2.CfnListener(
+            self,
+            "GWLBListener",
+            default_actions=[
+                elbv2.CfnListener.ActionProperty(
+                    type="forward", target_group_arn=target_group.ref  # get_att('Arn')
+                )
+            ],
+            load_balancer_arn=gwlb.ref,  # get_att('Arn')
+        )
+
+
+#   PAVMListener:
+#     Type: AWS::ElasticLoadBalancingV2::Listener
 #     Properties:
-#       VpcEndpointType: GatewayLoadBalancer
-#       ServiceName: !GetAtt RetrieveVpceServiceName.ServiceName
-#       SubnetIds:
-#         - !Select [ 0, !Ref DataSubnets ]
-#       VpcEndpointType: GatewayLoadBalancer
-#       VpcId: !Ref InterfaceVpcId
+#       DefaultActions:
+#         - Type: forward
+#           TargetGroupArn: !Ref PAVMTargetGroup
+#       LoadBalancerArn: !Ref PAVMGatewayLoadBalancer
 
 
 # INGRESS route to GWLBE
