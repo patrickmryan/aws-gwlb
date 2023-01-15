@@ -7,7 +7,7 @@ from aws_cdk import (
     Duration,
     Stack,
     Tags,
-    # ResolutionTypeHint,
+    CustomResource,
     IResolvable,
     aws_ec2 as ec2,
     aws_iam as iam,
@@ -192,15 +192,16 @@ class GwlbStack(Stack):
             log_retention=log_retention,
         )
 
-        # subnet_ids = [ subnet.subnet_id for subnet in vpc.select_subnets(subnet_group_name="APPLIANCE") ]
-        subnet_ids = (vpc.select_subnets(subnet_group_name="APPLIANCE")).subnet_ids
+        appliance_subnet_ids = (
+            vpc.select_subnets(subnet_group_name="APPLIANCE")
+        ).subnet_ids
 
         gwlb = elbv2.CfnLoadBalancer(
             self,
             "GatewayLoadBalancer",
             name=f"GWLB-{self.stack_name}",
             type="gateway",
-            subnets=subnet_ids,
+            subnets=appliance_subnet_ids,
             scheme="internal",
             load_balancer_attributes=[
                 elbv2.CfnLoadBalancer.LoadBalancerAttributeProperty(
@@ -216,14 +217,49 @@ class GwlbStack(Stack):
             gateway_load_balancer_arns=[gwlb.ref],
         )
 
-        # INGRESS route to GWLBE
-        # put GWLBEs in CHARLIE
-        # put instances in DELTA
-        # EGRESS default route to IGW, private CIDR route to GWLBE (edge route table)
+        retrieve_vpce_service_name = CustomResource(
+            self,
+            "RetrieveVpceServiceName",
+            resource_type="Custom::RetrieveAttributes",
+            service_token=vpce_service_lambda.function_arn,
+            properties={"VpceServiceId": gw_endpoint_service.ref},
+        )
 
-        # extract the named subnets from the VPC
+        # create the VPC endpoints
+        for az in vpc.availability_zones:
+            ec2.CfnVPCEndpoint(
+                self,
+                f"VPCE-{az}",
+                vpc_id=vpc.vpc_id,
+                subnet_ids=(
+                    vpc.select_subnets(
+                        subnet_group_name="APPLIANCE", availability_zones=[az]
+                    )
+                ).subnet_ids,
+                vpc_endpoint_type="GatewayLoadBalancer",
+                service_name=retrieve_vpce_service_name.get_att_string("ServiceName"),
+            )
 
-        # GWLB
-        # GWLB endpoints
-        # ASG
-        # routing
+
+#   PAVMGatewayEndpoint1:
+#     Type: AWS::EC2::VPCEndpoint
+#     Properties:
+#       VpcEndpointType: GatewayLoadBalancer
+#       ServiceName: !GetAtt RetrieveVpceServiceName.ServiceName
+#       SubnetIds:
+#         - !Select [ 0, !Ref DataSubnets ]
+#       VpcEndpointType: GatewayLoadBalancer
+#       VpcId: !Ref InterfaceVpcId
+
+
+# INGRESS route to GWLBE
+# put GWLBEs in CHARLIE
+# put instances in DELTA
+# EGRESS default route to IGW, private CIDR route to GWLBE (edge route table)
+
+# extract the named subnets from the VPC
+
+# GWLB
+# GWLB endpoints
+# ASG
+# routing

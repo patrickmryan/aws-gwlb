@@ -316,12 +316,12 @@ Resources:
   PAVMGatewayEndpoint2:
     Type: AWS::EC2::VPCEndpoint
     Properties:
+      VpcId: !Ref InterfaceVpcId
       VpcEndpointType: GatewayLoadBalancer
       ServiceName: !GetAtt RetrieveVpceServiceName.ServiceName
       SubnetIds:
         - !Select [ 1, !Ref DataSubnets ]
-      VpcEndpointType: GatewayLoadBalancer
-      VpcId: !Ref InterfaceVpcId
+      # VpcEndpointType: GatewayLoadBalancer
 
   # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html
   PAVMTargetGroup:
