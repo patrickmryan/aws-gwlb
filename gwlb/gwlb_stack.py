@@ -20,7 +20,7 @@ from constructs import Construct
 import boto3
 
 
-class CiscoSecureGwlbStack(Stack):
+class GwlbStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
@@ -30,6 +30,12 @@ class CiscoSecureGwlbStack(Stack):
         #  AZs
         #  AMI = ami-020a3162e09801a69, AL2-GeneveProxy
         # permission boundary
+
+        # to do
+        #  create VPC
+        #   subnets: egress (IGW), NAT, security, trusted
+        #  add CW logs agent to template, add permission to role
+        #  instance in trusted subnet, add SSM console access
 
         permissions_boundary_policy_arn = self.node.try_get_context(
             "PermissionsBoundaryPolicyArn"
@@ -180,7 +186,7 @@ class CiscoSecureGwlbStack(Stack):
             self,
             "VPCEndpointService",
             acceptance_required=False,
-            gateway_load_balancer_arns=[gwlb.ref],
+            gateway_load_balancer_arns=[gwlb.ref],  # <-- FIXED
         )
 
         # INGRESS route to GWLBE

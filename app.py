@@ -3,13 +3,13 @@ import os
 
 import aws_cdk as cdk
 
-from cisco_secure_gwlb.cisco_secure_gwlb_stack import CiscoSecureGwlbStack
+from gwlb.gwlb_stack import GwlbStack
 
 
 app = cdk.App()
-CiscoSecureGwlbStack(
+GwlbStack(
     app,
-    "CiscoSecureGwlbStack",
+    "GwlbStack",
     env=cdk.Environment(
         account=os.getenv("CDK_DEFAULT_ACCOUNT"), region=os.getenv("CDK_DEFAULT_REGION")
     ),
