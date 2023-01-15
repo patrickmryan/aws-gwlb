@@ -150,5 +150,13 @@
       }
     ]
   },
-  "ami:account=286367598331:filters.image-type.0=machine:filters.name.0=AL2-GeneveProxy:filters.state.0=available:region=us-east-1": "ami-020a3162e09801a69"
+  "ami:account=286367598331:filters.image-type.0=machine:filters.name.0=AL2-GeneveProxy:filters.state.0=available:region=us-east-1": "ami-020a3162e09801a69",
+  "availability-zones:account=286367598331:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ]
 }

@@ -36,6 +36,8 @@ class GwlbStack(Stack):
         #   subnets: egress (IGW), NAT, security, trusted
         #  add CW logs agent to template, add permission to role
         #  instance in trusted subnet, add SSM console access
+        #  lifecycle hooks
+        #     first just do init and terminate (not SFN)
 
         permissions_boundary_policy_arn = self.node.try_get_context(
             "PermissionsBoundaryPolicyArn"
@@ -61,38 +63,59 @@ class GwlbStack(Stack):
             )
             iam.PermissionsBoundary.of(self).apply(policy)
 
-        Tags.of(self).add("APPLIANCE", "TEST")
+        # Tags.of(self).add("APPLIANCE", "TEST")
 
-        ec2_resource = boto3.resource("ec2")
+        cidr_range = self.node.try_get_context("CidrRange")
+        # availability_zones = self.node.try_get_context("AvailabilityZones")
+        max_azs = self.node.try_get_context("MaxAZs")
+        subnet_configs = []
+        subnet_cidr_mask = 27
 
-        vpc_name = self.node.try_get_context("VpcName")
-        gwlb_subnet_name = "CHARLIE"
-        asg_subnet = "DELTA"
-
-        vpc_name = self.node.try_get_context("VpcName")
-        vpc = ec2.Vpc.from_lookup(self, "Vpc", tags={"Name": vpc_name})
-
-        if not vpc:
-            print(f"could not find VPC named {vpc_name}")
-            sys.exit(1)
-
-        vpc_id = vpc.vpc_id
-        intra_vpc = ec2.Peer.ipv4(vpc.vpc_cidr_block)
-
-        vpc_resource = ec2_resource.Vpc(vpc_id)
-
-        subnets_dict = {}
-        for subnet in vpc_resource.subnets.all():
-            name_tag = next(
-                (tag for tag in subnet.tags if tag["Key"] == "CWALL_ROLE"), None
+        subnet_configs.append(
+            ec2.SubnetConfiguration(
+                name="EGRESS",
+                subnet_type=ec2.SubnetType.PUBLIC,
+                cidr_mask=subnet_cidr_mask,
             )
-            subnet_name = name_tag["Value"]
-            if subnet_name not in subnets_dict:
-                subnets_dict[subnet_name] = []
-            subnets_dict[subnet_name].append(subnet.id)
+        )
+        subnet_configs.append(
+            ec2.SubnetConfiguration(
+                name="NAT",
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                cidr_mask=subnet_cidr_mask,
+            )
+        )
+        subnet_configs.append(
+            ec2.SubnetConfiguration(
+                name="APPLIANCE",
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                cidr_mask=subnet_cidr_mask,
+            )
+        )
+        subnet_configs.append(
+            ec2.SubnetConfiguration(
+                name="TRUSTED",
+                subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
+                cidr_mask=subnet_cidr_mask,
+            )
+        )
 
-        gwlb_subnet_ids = subnets_dict[gwlb_subnet_name]
+        vpc = ec2.Vpc(
+            self,
+            "GwlbVpc",
+            ip_addresses=ec2.IpAddresses.cidr(cidr_range),
+            enable_dns_hostnames=True,
+            enable_dns_support=True,
+            # availability_zones=availability_zones,
+            max_azs=max_azs,
+            nat_gateway_provider=ec2.NatProvider.gateway(),
+            subnet_configuration=subnet_configs,
+        )
 
+        # for az in availability_zones:
+        #     appliance_subnets = vpc.select_subnets(subnet_group_name="APPLIANCE", availability_zones=[az])
+
+        intra_vpc = ec2.Peer.ipv4(vpc.vpc_cidr_block)
         template_sg = ec2.SecurityGroup(self, "GeneveProxySG", vpc=vpc)
         geneve_port = 6081
         template_sg.connections.allow_from(
@@ -104,7 +127,8 @@ class GwlbStack(Stack):
         # security group(s)
         # launch template
 
-        ami = ec2.MachineImage.lookup(name="AL2-GeneveProxy")
+        ami_name = self.node.try_get_context("AmiName")
+        ami = ec2.MachineImage.lookup(name=ami_name)
 
         # role
         # enable CW logs access
@@ -168,12 +192,15 @@ class GwlbStack(Stack):
             log_retention=log_retention,
         )
 
+        # subnet_ids = [ subnet.subnet_id for subnet in vpc.select_subnets(subnet_group_name="APPLIANCE") ]
+        subnet_ids = (vpc.select_subnets(subnet_group_name="APPLIANCE")).subnet_ids
+
         gwlb = elbv2.CfnLoadBalancer(
             self,
             "GatewayLoadBalancer",
             name=f"GWLB-{self.stack_name}",
             type="gateway",
-            subnets=gwlb_subnet_ids,
+            subnets=subnet_ids,
             scheme="internal",
             load_balancer_attributes=[
                 elbv2.CfnLoadBalancer.LoadBalancerAttributeProperty(
@@ -186,7 +213,7 @@ class GwlbStack(Stack):
             self,
             "VPCEndpointService",
             acceptance_required=False,
-            gateway_load_balancer_arns=[gwlb.ref],  # <-- FIXED
+            gateway_load_balancer_arns=[gwlb.ref],
         )
 
         # INGRESS route to GWLBE

@@ -15,7 +15,12 @@
     ]
   },
   "context": {
-    "VpcName": "OpenSeawallStack/Vpc",
+    "AmiName": "AL2-GeneveProxy",
+    "AvailabilityZones": ["us-east-1a", "us-east-1b", "us-east-1c"],
+    "MaxAZs": 3,
+    "CidrRange": "172.16.0.0/21",
+    "KeyName": "",
+
 
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
