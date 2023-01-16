@@ -535,6 +535,34 @@ class GwlbStack(Stack):
             retention=logs.RetentionDays.ONE_WEEK,
         )
 
+        # https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-cwl.html
+
+        statement = iam.PolicyStatement(
+            actions=[
+                "logs:PutLogEvents",
+                "logs:DescribeLogStreams",
+                "logs:DescribeLogGroups",
+                "logs:CreateLogStream",
+                "logs:CreateLogGroup",
+                "logs:PutRetentionPolicy",
+            ],
+            effect=iam.Effect.ALLOW,
+            resources=["*"],
+        )
+
+        statement.add_account_condition(self.account)
+        statement.add_condition(
+            "ArnLike",
+            {
+                "aws:SourceArn": f"arn:{self.partition}:ec2:{self.region}:{self.account}:vpc-flow-log/*"
+            },
+        )
+
+        # log_policy = iam.PolicyDocument(
+        #     assign_sids=True,
+        #     statements=[statement],
+        # )
+
         flow_log_role = iam.Role(
             self,
             "FlowLogRole",
@@ -542,32 +570,10 @@ class GwlbStack(Stack):
             inline_policies={
                 "logs": iam.PolicyDocument(
                     assign_sids=True,
-                    statements=[
-                        iam.PolicyStatement(
-                            actions=[
-                                "logs:PutLogEvents",
-                                "logs:DescribeLogStreams",
-                                "logs:DescribeLogGroups",
-                                "logs:CreateLogStream",
-                                "logs:CreateLogGroup",
-                                "logs:PutRetentionPolicy",
-                            ],
-                            effect=iam.Effect.ALLOW,
-                            resources=["*"],
-                        ),
-                    ],
+                    statements=[statement],
                 )
             },
         )
-
-        # "Condition": {
-        #     "StringEquals": {
-        #         "aws:SourceAccount": "account_id"
-        #     },
-        #     "ArnLike": {
-        #         "aws:SourceArn": "arn:aws:ec2:region:account_id:vpc-flow-log/flow-log-id"
-        #     }
-        # }
 
         subnets = appliance_subnets.subnets
         for n in range(len(subnets)):
