@@ -171,8 +171,9 @@ class GwlbStack(Stack):
                     statements=[
                         iam.PolicyStatement(
                             actions=[
-                                "ec2:Describe*"
-                            ],  # ["ec2:DescribeVpcEndpointServiceConfigurations"],
+                                "ec2:DescribeVpcEndpointServiceConfigurations",
+                                # "ec2:Describe*",
+                            ],
                             effect=iam.Effect.ALLOW,
                             resources=["*"],  # maybe narrower
                         ),
@@ -256,33 +257,41 @@ class GwlbStack(Stack):
             vpc_id=vpc.vpc_id,
         )
 
-        asg = autoscaling.AutoScalingGroup(
+        subnet_ids = [
+            subnet.subnet_id
+            for subnet in (vpc.select_subnets(subnet_group_name="APPLIANCE")).subnets
+        ]
+
+        asg = autoscaling.CfnAutoScalingGroup(
             self,
             "ASG",
             auto_scaling_group_name=f"GWLB-ASG-{self.stack_name}",
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnets=(vpc.select_subnets(subnet_group_name="APPLIANCE")).subnets
+            vpc_zone_identifier=subnet_ids,
+            launch_template=autoscaling.CfnAutoScalingGroup.LaunchTemplateSpecificationProperty(
+                launch_template_id=launch_template.launch_template_id,
+                version=launch_template.latest_version_number,
             ),
-            launch_template=launch_template,
-            cooldown=Duration.minutes(1),
-            desired_capacity=0,  # zero for a reason
-            min_capacity=0,
-            health_check=autoscaling.HealthCheck.ec2(grace=Duration.minutes(1)),
-            group_metrics=[autoscaling.GroupMetrics.all()],
-            update_policy=autoscaling.UpdatePolicy.rolling_update(),
+            # cooldown="60",   #Duration.minutes(1),
+            desired_capacity="0",  # zero for a reason
+            min_size="0",
+            max_size=str(max_azs * 2),
+            health_check_type="EC2",
+            health_check_grace_period=60,  # Duration.minutes(1),
+            # group_metrics=[autoscaling.GroupMetrics.all()],
+            # metrics_collection=
+            # update_policy=autoscaling.UpdatePolicy.rolling_update(),
+            target_group_arns=[target_group.ref],
         )
-        asg.attach_to_network_target_group(target_group)
 
         listener = elbv2.CfnListener(
             self,
             "GWLBListener",
             default_actions=[
                 elbv2.CfnListener.ActionProperty(
-                    type="forward", target_group_arn=target_group.ref  # get_att('Arn')
+                    type="forward", target_group_arn=target_group.ref
                 )
             ],
-            load_balancer_arn=gwlb.ref,  # get_att('Arn')
+            load_balancer_arn=gwlb.ref,
         )
 
         # routes:
@@ -326,3 +335,4 @@ class GwlbStack(Stack):
         # lifeycle hook
         # functions
         # custom resource to set the capacity at the right time
+        # cw logs for firewalls
