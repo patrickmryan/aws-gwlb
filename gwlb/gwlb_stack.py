@@ -315,9 +315,28 @@ class GwlbStack(Stack):
             min_size="0",
             max_size=str(max_azs * 2),
             health_check_type="EC2",
-            health_check_grace_period=60,  # Duration.minutes(1),
+            health_check_grace_period=60,
             # group_metrics=[autoscaling.GroupMetrics.all()],
-            # metrics_collection=
+            metrics_collection=[
+                autoscaling.CfnAutoScalingGroup.MetricsCollectionProperty(
+                    granularity="1Minute",
+                    metrics=[
+                        # "GroupMinSize",
+                        # "GroupMaxSize",
+                        "GroupDesiredCapacity",
+                        "GroupInServiceInstances",
+                        # "GroupPendingInstances",
+                        # "GroupStandbyInstances",
+                        "GroupTerminatingInstances",
+                        "GroupTotalInstances",
+                        # "GroupInServiceCapacity",
+                        # "GroupPendingCapacity",
+                        # "GroupStandbyCapacity",
+                        # "GroupTerminatingCapacity",
+                        "GroupTotalCapacity",
+                    ],
+                )
+            ],
             # update_policy=autoscaling.UpdatePolicy.rolling_update(),
             notification_configurations=[
                 autoscaling.CfnAutoScalingGroup.NotificationConfigurationProperty(
