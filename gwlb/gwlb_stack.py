@@ -229,7 +229,7 @@ class GwlbStack(Stack):
             # environment={**debug_env},
             timeout=Duration.seconds(150),
             role=service_role,
-            log_retention=log_retention,
+            log_retention=logs.RetentionDays.ONE_DAY,  # log_retention,
         )
 
         appliance_subnet_ids = (
