@@ -1,5 +1,7 @@
 import sys
 from os.path import join
+import json
+from datetime import datetime, timezone
 
 import typing
 from aws_cdk import (
@@ -12,7 +14,11 @@ from aws_cdk import (
     aws_elasticloadbalancingv2 as elbv2,
     aws_autoscaling as autoscaling,
     aws_lambda as _lambda,
+    aws_events as events,
+    aws_events_targets as events_targets,
     aws_logs as logs,
+    aws_sns as sns,
+    custom_resources as cr,
 )
 from constructs import Construct
 
@@ -294,10 +300,13 @@ class GwlbStack(Stack):
             for subnet in (vpc.select_subnets(subnet_group_name="APPLIANCE")).subnets
         ]
 
+        asg_name = "gwlb-asg-" + self.stack_name
+        asg_arn = f"arn:{self.partition}:autoscaling:{self.region}:{self.account}:autoScalingGroup:*:autoScalingGroupName/{asg_name}"
+
         asg = autoscaling.CfnAutoScalingGroup(
             self,
             "ASG",
-            auto_scaling_group_name=f"GWLB-ASG-{self.stack_name}",
+            auto_scaling_group_name=asg_name,  # f"GWLB-ASG-{self.stack_name}",
             vpc_zone_identifier=subnet_ids,
             launch_template=autoscaling.CfnAutoScalingGroup.LaunchTemplateSpecificationProperty(
                 launch_template_id=launch_template.launch_template_id,
@@ -367,4 +376,152 @@ class GwlbStack(Stack):
         # lifeycle hook
         # functions
         # custom resource to set the capacity at the right time
+
+        set_desired_instances_sdk_call = cr.AwsSdkCall(
+            service="AutoScaling",
+            action="updateAutoScalingGroup",
+            parameters={
+                "AutoScalingGroupName": asg_name,
+                "DesiredCapacity": max_azs,
+            },
+            physical_resource_id=cr.PhysicalResourceId.of(
+                "PutDesiredInstancesSetting" + datetime.now(timezone.utc).isoformat()
+            ),
+        )
+
+        asg_update_resource = cr.AwsCustomResource(
+            self,
+            "DesiredInstancesResource",
+            on_create=set_desired_instances_sdk_call,
+            on_update=set_desired_instances_sdk_call,  # update just does the same thing as create.
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(
+                        effect=iam.Effect.ALLOW,
+                        actions=["autoscaling:updateAutoScalingGroup"],
+                        resources=[asg_arn],
+                    )
+                ]
+            ),
+        )
+
         # cw logs for firewalls
+
+        # now adding the lambda for the launching hook
+
+        acct_instances_arn = self.format_arn(
+            partition=self.partition,
+            service="ec2",
+            region=self.region,
+            account=self.account,
+            resource="instance",
+            resource_name="*",
+        )
+
+        managed_policies = [basic_lambda_policy]
+        lambda_role = iam.Role(
+            self,
+            "LaunchingHookRole",
+            assumed_by=lambda_principal,
+            managed_policies=managed_policies,
+            inline_policies={
+                "CompleteLaunch": iam.PolicyDocument(
+                    assign_sids=True,
+                    statements=[
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=["autoscaling:CompleteLifecycleAction"],
+                            resources=[asg_arn],
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=["ec2:DescribeInstances"],
+                            resources=["*"],
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=["ec2:CreateTags"],
+                            resources=[acct_instances_arn],
+                        ),
+                    ],
+                )
+            },
+        )
+
+        launching_hook_lambda = _lambda.Function(
+            self,
+            "LaunchingHookLambda",
+            runtime=runtime,
+            code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
+            handler="launching_hook.lambda_handler",
+            timeout=Duration.seconds(60),
+            role=lambda_role,
+            log_retention=log_retention,
+        )
+
+        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.custom_resources/AwsCustomResource.html
+        # https://medium.com/@imageryan/using-awscustomresource-to-fill-the-gaps-in-aws-cdk-351c8423fa80
+
+        set_launch_hook_sdk_call = cr.AwsSdkCall(
+            service="AutoScaling",
+            action="putLifecycleHook",
+            parameters={
+                "AutoScalingGroupName": asg_name,
+                "LifecycleHookName": "InstanceLaunchingHook",
+                "DefaultResult": "ABANDON",
+                "HeartbeatTimeout": 120,
+                "LifecycleTransition": "autoscaling:EC2_INSTANCE_LAUNCHING",
+                "NotificationMetadata": json.dumps(
+                    {"message": "here is some cool metadata"}
+                ),
+            },
+            physical_resource_id=cr.PhysicalResourceId.of(
+                "PutInstanceLaunchingHookSetting"
+                + datetime.now(timezone.utc).isoformat()
+            ),
+        )
+
+        launch_hook_resource = cr.AwsCustomResource(
+            self,
+            "LaunchHookResource",
+            on_create=set_launch_hook_sdk_call,
+            on_update=set_launch_hook_sdk_call,  # update just does the same thing as create.
+            # on_delete   not implemented
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(
+                        effect=iam.Effect.ALLOW,
+                        actions=[
+                            "autoscaling:PutLifecycleHook",
+                            "autoscaling:DeleteLifecycleHook",
+                        ],
+                        resources=[asg_arn],
+                    )
+                ]
+            ),
+        )
+
+        launching_rule = events.Rule(
+            self,
+            "LaunchingHookRule",
+            event_pattern=events.EventPattern(
+                source=["aws.autoscaling"],
+                detail={
+                    "LifecycleTransition": ["autoscaling:EC2_INSTANCE_LAUNCHING"],
+                    "AutoScalingGroupName": [asg_name],
+                },
+            ),
+            targets=[events_targets.LambdaFunction(launching_hook_lambda)],
+        )
+
+        # Make sure the launching rule and lambda are created before the ASG.
+        # Bad things can happen if the ASG starts spinning up instances before the
+        # lambdas and rules are deployed.
+        asg.node.add_dependency(launching_rule)
+
+        # the launch hook resource should not execute until AFTER the ASG been deployed
+        launch_hook_resource.node.add_dependency(asg)
+
+        # set desired_instances AFTER the ASG, hook, lambda, and rule are all deployed.
+        asg_update_resource.node.add_dependency(asg)
+        asg_update_resource.node.add_dependency(launching_rule)

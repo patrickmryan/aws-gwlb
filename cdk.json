@@ -20,6 +20,7 @@
     "CidrRange": "172.16.0.0/21",
     "KeyName": "pmr-iamadmin-use1",
 
+    "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
 
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,

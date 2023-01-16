@@ -42,6 +42,7 @@ def lambda_handler(event, context):
     print(f"calling autoscaling.complete_lifecycle_action({params})")
 
     try:
+        print(json.dumps(params))
         response = autoscaling.complete_lifecycle_action(**params)
     except ClientError as e:
         message = "Error completing lifecycle action: {}".format(e)
