@@ -294,11 +294,9 @@ class GwlbStack(Stack):
         for az, vpce in vpc_endpoints.items():
 
             subnets = (
-                vpc.select_subnets(
-                    subnet_group_name="APPLIANCE", availability_zones=[az]
-                )
+                vpc.select_subnets(subnet_group_name="TRUSTED", availability_zones=[az])
             ).subnets
-            # for subnet in subnets:
+
             for n in range(len(subnets)):
                 # add the outbound route
                 subnets[n].add_route(

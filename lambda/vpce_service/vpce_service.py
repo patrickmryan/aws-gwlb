@@ -33,7 +33,6 @@ def lambda_handler(event, context):
         logger.info("Retrieving VPC Endpoint Service Name:")
         try:
             response = ec2.describe_vpc_endpoint_service_configurations(
-                # Filters=[{"Name": "service-id", "Values": [serviceid]}]
                 ServiceIds=[serviceid]
             )
         except Exception as e:
@@ -43,7 +42,7 @@ def lambda_handler(event, context):
 
         service_name = response["ServiceConfigurations"][0]["ServiceName"]
 
-        time.sleep(120)
+        time.sleep(120)  # this seems weird
 
         response_data["ServiceName"] = service_name
         response_status = cfnresponse.SUCCESS
