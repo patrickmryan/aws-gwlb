@@ -114,8 +114,9 @@ class GwlbStack(Stack):
         template_sg.connections.allow_from(
             ec2.Peer.any_ipv4(), ec2.Port.tcp(geneve_port)
         )
+        # trust all intra-VPC traffic
         template_sg.connections.allow_from(
-            intra_vpc, ec2.Peer.any_ipv4()
+            intra_vpc, ec2.Port.all_traffic()
         )  # ec2.Port.tcp(22)
 
         # IAM policies
