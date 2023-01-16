@@ -8,6 +8,7 @@ from aws_cdk import (
     Duration,
     Stack,
     Tags,
+    RemovalPolicy,
     CustomResource,
     aws_ec2 as ec2,
     aws_iam as iam,
@@ -232,9 +233,8 @@ class GwlbStack(Stack):
             log_retention=logs.RetentionDays.ONE_DAY,  # log_retention,
         )
 
-        appliance_subnet_ids = (
-            vpc.select_subnets(subnet_group_name="APPLIANCE")
-        ).subnet_ids
+        appliance_subnets = vpc.select_subnets(subnet_group_name="APPLIANCE")
+        appliance_subnet_ids = appliance_subnets.subnet_ids
 
         gwlb = elbv2.CfnLoadBalancer(
             self,
@@ -295,10 +295,10 @@ class GwlbStack(Stack):
             vpc_id=vpc.vpc_id,
         )
 
-        subnet_ids = [
-            subnet.subnet_id
-            for subnet in (vpc.select_subnets(subnet_group_name="APPLIANCE")).subnets
-        ]
+        # subnet_ids = [
+        #     subnet.subnet_id
+        #     for subnet in (vpc.select_subnets(subnet_group_name="APPLIANCE")).subnets
+        # ]
 
         asg_name = "gwlb-asg-" + self.stack_name
         asg_arn = f"arn:{self.partition}:autoscaling:{self.region}:{self.account}:autoScalingGroup:*:autoScalingGroupName/{asg_name}"
@@ -307,7 +307,7 @@ class GwlbStack(Stack):
             self,
             "ASG",
             auto_scaling_group_name=asg_name,  # f"GWLB-ASG-{self.stack_name}",
-            vpc_zone_identifier=subnet_ids,
+            vpc_zone_identifier=appliance_subnet_ids,
             launch_template=autoscaling.CfnAutoScalingGroup.LaunchTemplateSpecificationProperty(
                 launch_template_id=launch_template.launch_template_id,
                 version=launch_template.latest_version_number,
@@ -516,7 +516,7 @@ class GwlbStack(Stack):
 
         # Make sure the launching rule and lambda are created before the ASG.
         # Bad things can happen if the ASG starts spinning up instances before the
-        # lambdas and rules are deployed.
+        # lifecycle hook lambdas and rules are deployed.
         asg.node.add_dependency(launching_rule)
 
         # the launch hook resource should not execute until AFTER the ASG been deployed
@@ -525,3 +525,64 @@ class GwlbStack(Stack):
         # set desired_instances AFTER the ASG, hook, lambda, and rule are all deployed.
         asg_update_resource.node.add_dependency(asg)
         asg_update_resource.node.add_dependency(launching_rule)
+
+        # VPC flow logs on APPLIANCE subnets.
+
+        log_group = logs.LogGroup(
+            self,
+            "VPCFlowLogs",
+            removal_policy=RemovalPolicy.DESTROY,
+            retention=logs.RetentionDays.ONE_WEEK,
+        )
+
+        flow_log_role = iam.Role(
+            self,
+            "FlowLogRole",
+            assumed_by=iam.ServicePrincipal("vpc-flow-logs.amazonaws.com"),
+            inline_policies={
+                "logs": iam.PolicyDocument(
+                    assign_sids=True,
+                    statements=[
+                        iam.PolicyStatement(
+                            actions=[
+                                "logs:PutLogEvents",
+                                "logs:DescribeLogStreams",
+                                "logs:DescribeLogGroups",
+                                "logs:CreateLogStream",
+                                "logs:CreateLogGroup",
+                                "logs:PutRetentionPolicy",
+                            ],
+                            effect=iam.Effect.ALLOW,
+                            resources=["*"],
+                        ),
+                    ],
+                )
+            },
+        )
+
+        # "Condition": {
+        #     "StringEquals": {
+        #         "aws:SourceAccount": "account_id"
+        #     },
+        #     "ArnLike": {
+        #         "aws:SourceArn": "arn:aws:ec2:region:account_id:vpc-flow-log/flow-log-id"
+        #     }
+        # }
+
+        subnets = appliance_subnets.subnets
+        for n in range(len(subnets)):
+            ec2.FlowLog(
+                self,
+                f"ApplianceFlowLog{n}",
+                resource_type=ec2.FlowLogResourceType.from_subnet(subnets[n]),
+                destination=ec2.FlowLogDestination.to_cloud_watch_logs(
+                    log_group, flow_log_role
+                ),
+                traffic_type=ec2.FlowLogTrafficType.ALL,
+                max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
+                # log_format
+            )
+
+        # install logs agent
+        # SNS topic for scaling events
+        # metrics, dashboard
