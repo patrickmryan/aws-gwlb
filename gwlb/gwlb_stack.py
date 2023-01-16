@@ -295,10 +295,8 @@ class GwlbStack(Stack):
             vpc_id=vpc.vpc_id,
         )
 
-        # subnet_ids = [
-        #     subnet.subnet_id
-        #     for subnet in (vpc.select_subnets(subnet_group_name="APPLIANCE")).subnets
-        # ]
+        # topic for autoscaling events
+        scaling_topic = sns.Topic(self, "AsgScalingEvent")
 
         asg_name = "gwlb-asg-" + self.stack_name
         asg_arn = f"arn:{self.partition}:autoscaling:{self.region}:{self.account}:autoScalingGroup:*:autoScalingGroupName/{asg_name}"
@@ -321,6 +319,17 @@ class GwlbStack(Stack):
             # group_metrics=[autoscaling.GroupMetrics.all()],
             # metrics_collection=
             # update_policy=autoscaling.UpdatePolicy.rolling_update(),
+            notification_configurations=[
+                autoscaling.CfnAutoScalingGroup.NotificationConfigurationProperty(
+                    topic_arn=scaling_topic.topic_arn,
+                    notification_types=[
+                        "autoscaling:EC2_INSTANCE_LAUNCH",
+                        "autoscaling:EC2_INSTANCE_LAUNCH_ERROR",
+                        "autoscaling:EC2_INSTANCE_TERMINATE",
+                        "autoscaling:EC2_INSTANCE_TERMINATE_ERROR",
+                    ],
+                )
+            ],
             target_group_arns=[target_group.ref],
         )
 
@@ -557,11 +566,6 @@ class GwlbStack(Stack):
                 "aws:SourceArn": f"arn:{self.partition}:ec2:{self.region}:{self.account}:vpc-flow-log/*"
             },
         )
-
-        # log_policy = iam.PolicyDocument(
-        #     assign_sids=True,
-        #     statements=[statement],
-        # )
 
         flow_log_role = iam.Role(
             self,
