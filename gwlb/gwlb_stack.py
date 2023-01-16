@@ -127,7 +127,41 @@ class GwlbStack(Stack):
         ami = ec2.MachineImage.lookup(name=ami_name)
 
         # role
+
+        instance_role = iam.Role(
+            self,
+            "InstanceRole",
+            assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonS3ReadOnlyAccess"
+                ),
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonSSMManagedInstanceCore"
+                ),
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "CloudWatchAgentServerPolicy"
+                ),
+            ],
+            inline_policies={
+                "logretention": iam.PolicyDocument(
+                    assign_sids=True,
+                    statements=[
+                        iam.PolicyStatement(
+                            actions=[
+                                "logs:PutRetentionPolicy",
+                            ],
+                            effect=iam.Effect.ALLOW,
+                            resources=["*"],
+                        ),
+                    ],
+                )
+            },
+        )
+
         # enable CW logs access
+        # create CW log
+        # add code to user data
 
         launch_template = ec2.LaunchTemplate(
             self,
@@ -142,13 +176,13 @@ class GwlbStack(Stack):
                     volume=ec2.BlockDeviceVolume.ebs(40, delete_on_termination=True),
                 )
             ],
-            key_name=key_name,
-            # role
+            # key_name=key_name,    # don't need this. SSM console is enabled.
+            role=instance_role,
             security_group=template_sg,
             # user_data=user_data,
         )
 
-        # setting for all python Lambda functions
+        # settings for all python Lambda functions
         runtime = _lambda.Runtime.PYTHON_3_9
         lambda_root = "lambda"
         log_retention = logs.RetentionDays.ONE_WEEK
