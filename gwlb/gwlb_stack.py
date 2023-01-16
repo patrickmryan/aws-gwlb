@@ -15,7 +15,6 @@ from aws_cdk import (
     aws_logs as logs,
 )
 from constructs import Construct
-import boto3
 
 
 class GwlbStack(Stack):
@@ -104,14 +103,10 @@ class GwlbStack(Stack):
             ip_addresses=ec2.IpAddresses.cidr(cidr_range),
             enable_dns_hostnames=True,
             enable_dns_support=True,
-            # availability_zones=availability_zones,
             max_azs=max_azs,
             nat_gateway_provider=ec2.NatProvider.gateway(),
             subnet_configuration=subnet_configs,
         )
-
-        # for az in availability_zones:
-        #     appliance_subnets = vpc.select_subnets(subnet_group_name="APPLIANCE", availability_zones=[az])
 
         intra_vpc = ec2.Peer.ipv4(vpc.vpc_cidr_block)
         template_sg = ec2.SecurityGroup(self, "GeneveProxySG", vpc=vpc)
@@ -119,7 +114,9 @@ class GwlbStack(Stack):
         template_sg.connections.allow_from(
             ec2.Peer.any_ipv4(), ec2.Port.tcp(geneve_port)
         )
-        template_sg.connections.allow_from(intra_vpc, ec2.Port.tcp(22))
+        template_sg.connections.allow_from(
+            intra_vpc, ec2.Peer.any_ipv4()
+        )  # ec2.Port.tcp(22)
 
         # IAM policies
         # security group(s)
