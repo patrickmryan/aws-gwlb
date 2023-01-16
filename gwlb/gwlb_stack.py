@@ -137,7 +137,7 @@ class GwlbStack(Stack):
 
         instance_role = iam.Role(
             self,
-            "InstanceRole",
+            "FirewallInstanceRole",
             assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name(
@@ -447,9 +447,9 @@ class GwlbStack(Stack):
         )
 
         managed_policies = [basic_lambda_policy]
-        lambda_role = iam.Role(
+        lifecycle_hook_role = iam.Role(
             self,
-            "LaunchingHookRole",
+            "LifecycleHookRole",
             assumed_by=lambda_principal,
             managed_policies=managed_policies,
             inline_policies={
@@ -476,83 +476,54 @@ class GwlbStack(Stack):
             },
         )
 
-        launching_hook_lambda = _lambda.Function(
-            self,
-            "LaunchingHookLambda",
-            runtime=runtime,
-            code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
-            handler="launching_hook.lambda_handler",
-            timeout=Duration.seconds(60),
-            role=lambda_role,
-            log_retention=log_retention,
-        )
-
-        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.custom_resources/AwsCustomResource.html
-        # https://medium.com/@imageryan/using-awscustomresource-to-fill-the-gaps-in-aws-cdk-351c8423fa80
-
-        set_launch_hook_sdk_call = cr.AwsSdkCall(
-            service="AutoScaling",
-            action="putLifecycleHook",
-            parameters={
-                "AutoScalingGroupName": asg_name,
-                "LifecycleHookName": "InstanceLaunchingHook",
-                "DefaultResult": "ABANDON",
-                "HeartbeatTimeout": 120,
-                "LifecycleTransition": "autoscaling:EC2_INSTANCE_LAUNCHING",
-                "NotificationMetadata": json.dumps(
-                    {"message": "here is some cool metadata"}
-                ),
-            },
-            physical_resource_id=cr.PhysicalResourceId.of(
-                "PutInstanceLaunchingHookSetting"
-                + datetime.now(timezone.utc).isoformat()
-            ),
-        )
-
-        launch_hook_resource = cr.AwsCustomResource(
-            self,
-            "LaunchHookResource",
-            on_create=set_launch_hook_sdk_call,
-            on_update=set_launch_hook_sdk_call,  # update just does the same thing as create.
-            # on_delete   not implemented
-            policy=cr.AwsCustomResourcePolicy.from_statements(
-                [
-                    iam.PolicyStatement(
-                        effect=iam.Effect.ALLOW,
-                        actions=[
-                            "autoscaling:PutLifecycleHook",
-                            "autoscaling:DeleteLifecycleHook",
-                        ],
-                        resources=[asg_arn],
-                    )
-                ]
-            ),
-        )
-
-        launching_rule = events.Rule(
-            self,
-            "LaunchingHookRule",
-            event_pattern=events.EventPattern(
-                source=["aws.autoscaling"],
-                detail={
-                    "LifecycleTransition": ["autoscaling:EC2_INSTANCE_LAUNCHING"],
-                    "AutoScalingGroupName": [asg_name],
-                },
-            ),
-            targets=[events_targets.LambdaFunction(launching_hook_lambda)],
-        )
+        lambda_settings = {
+            "log_retention": log_retention,
+            "runtime": runtime,
+            "timeout": Duration.seconds(60),
+        }
 
         # Make sure the launching rule and lambda are created before the ASG.
         # Bad things can happen if the ASG starts spinning up instances before the
         # lifecycle hook lambdas and rules are deployed.
+
+        launching_rule = self.add_lifecycle_hook(
+            construct_id="Launching",
+            asg=asg,
+            asg_name=asg_name,
+            asg_arn=asg_arn,
+            lifecycle_hook_role=lifecycle_hook_role,
+            lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
+            lambda_settings=lambda_settings,
+            lambda_handler="launching_hook.lambda_handler",
+            # lifecycle_hook_name="Launching",
+            lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
+            default_result="ABANDON",
+        )
+
         asg.node.add_dependency(launching_rule)
+        asg_update_resource.node.add_dependency(launching_rule)
 
         # the launch hook resource should not execute until AFTER the ASG been deployed
-        launch_hook_resource.node.add_dependency(asg)
+        # launch_hook_resource.node.add_dependency(asg)
+
+        terminating_rule = self.add_lifecycle_hook(
+            construct_id="Terminating",
+            asg=asg,
+            asg_name=asg_name,
+            asg_arn=asg_arn,
+            lifecycle_hook_role=lifecycle_hook_role,
+            lambda_code=_lambda.Code.from_asset(join(lambda_root, "terminating_hook")),
+            lambda_settings=lambda_settings,
+            lambda_handler="terminating_hook.lambda_handler",
+            # lifecycle_hook_name="Terminating",
+            lifecycle_transition="autoscaling:EC2_INSTANCE_TERMINATING",
+            default_result="CONTINUE",
+        )
+        asg.node.add_dependency(terminating_rule)
+        asg_update_resource.node.add_dependency(terminating_rule)
 
         # set desired_instances AFTER the ASG, hook, lambda, and rule are all deployed.
         asg_update_resource.node.add_dependency(asg)
-        asg_update_resource.node.add_dependency(launching_rule)
 
         # VPC flow logs on APPLIANCE subnets.
 
@@ -613,5 +584,154 @@ class GwlbStack(Stack):
             )
 
         # install logs agent
-        # SNS topic for scaling events
         # metrics, dashboard
+
+        launch_test_instance_param = self.node.try_get_context("LaunchTestInstance")
+
+        if launch_test_instance_param:
+            self.launch_test_instance(
+                vpc=vpc,
+                vpc_subnets=ec2.SubnetSelection(subnet_group_name="TRUSTED"),
+                # key_name=None
+            )
+
+    def add_lifecycle_hook(
+        self,
+        construct_id=None,
+        asg=None,
+        asg_name=None,
+        asg_arn=None,
+        lifecycle_hook_role=None,
+        lambda_code=None,
+        lambda_settings={},
+        lambda_handler=None,
+        # lifecycle_hook_name=None,
+        lifecycle_transition=None,
+        default_result=None,
+    ):
+
+        hook_lambda = _lambda.Function(
+            self,
+            construct_id + "HookLambda",
+            code=lambda_code,
+            handler=lambda_handler,
+            role=lifecycle_hook_role,
+            **lambda_settings,
+        )
+
+        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.custom_resources/AwsCustomResource.html
+        # https://medium.com/@imageryan/using-awscustomresource-to-fill-the-gaps-in-aws-cdk-351c8423fa80
+
+        lifecycle_hook_name = construct_id + "Hook"
+
+        put_hook_sdk_call = cr.AwsSdkCall(
+            service="AutoScaling",
+            action="putLifecycleHook",
+            parameters={
+                "AutoScalingGroupName": asg_name,
+                "LifecycleHookName": lifecycle_hook_name,
+                "DefaultResult": default_result,
+                "HeartbeatTimeout": 120,
+                "LifecycleTransition": lifecycle_transition,
+                "NotificationMetadata": json.dumps(
+                    {"message": "here is some cool metadata"}
+                ),
+            },
+            physical_resource_id=cr.PhysicalResourceId.of(
+                construct_id + "PutHookSetting" + datetime.now(timezone.utc).isoformat()
+            ),
+        )
+
+        delete_hook_sdk_call = cr.AwsSdkCall(
+            service="AutoScaling",
+            action="deleteLifecycleHook",
+            parameters={
+                "AutoScalingGroupName": asg_name,
+                "LifecycleHookName": lifecycle_hook_name,
+            },
+            physical_resource_id=cr.PhysicalResourceId.of(
+                # lifecycle_hook_name
+                construct_id
+                + "DeleteHookSetting"
+                + datetime.now(timezone.utc).isoformat()
+            ),
+        )
+
+        hook_resource = cr.AwsCustomResource(
+            self,
+            construct_id + "HookCustomResource",
+            on_create=put_hook_sdk_call,
+            on_update=put_hook_sdk_call,  # update just does the same thing as create.
+            on_delete=delete_hook_sdk_call,
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(
+                        effect=iam.Effect.ALLOW,
+                        actions=[
+                            "autoscaling:PutLifecycleHook",
+                            "autoscaling:DeleteLifecycleHook",
+                        ],
+                        resources=[asg_arn],
+                    )
+                ]
+            ),
+        )
+
+        lifecycle_rule = events.Rule(
+            self,
+            construct_id + "HookRule",
+            event_pattern=events.EventPattern(
+                source=["aws.autoscaling"],
+                detail={
+                    "LifecycleTransition": [lifecycle_transition],
+                    "AutoScalingGroupName": [asg_name],
+                },
+            ),
+            targets=[events_targets.LambdaFunction(hook_lambda)],
+        )
+
+        # Make sure the launching rule and lambda are created before the ASG.
+        # Bad things can happen if the ASG starts spinning up instances before the
+        # lifecycle hook lambdas and rules are deployed.
+        asg.node.add_dependency(lifecycle_rule)
+
+        # the launch hook resource should not execute until AFTER the ASG been deployed
+        hook_resource.node.add_dependency(asg)
+
+        return lifecycle_rule
+
+    def launch_test_instance(self, vpc=None, vpc_subnets=None, key_name=None):
+
+        instance_role = iam.Role(
+            self,
+            "TestInstanceRole",
+            assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonS3ReadOnlyAccess"
+                ),
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonSSMManagedInstanceCore"
+                ),
+            ],
+        )
+
+        test_instance = ec2.Instance(
+            self,
+            "TestInstance",
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            machine_image=ec2.MachineImage.latest_amazon_linux(),
+            instance_type=ec2.InstanceType.of(
+                ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.MICRO
+            ),
+            block_devices=[
+                ec2.BlockDevice(
+                    device_name="/dev/xvda",
+                    volume=ec2.BlockDeviceVolume.ebs(10, delete_on_termination=True),
+                )
+            ],
+            role=instance_role,
+        )
+
+        return test_instance

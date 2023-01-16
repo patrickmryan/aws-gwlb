@@ -19,6 +19,7 @@
     "MaxAZs": 2,
     "CidrRange": "172.16.0.0/21",
     "KeyName": "pmr-iamadmin-use1",
+    "LaunchTestInstance": true,
 
     "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
 
