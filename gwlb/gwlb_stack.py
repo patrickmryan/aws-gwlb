@@ -1,14 +1,12 @@
 import sys
 from os.path import join
 
-# from typing import Union, Sequence
 import typing
 from aws_cdk import (
     Duration,
     Stack,
     Tags,
     CustomResource,
-    IResolvable,
     aws_ec2 as ec2,
     aws_iam as iam,
     aws_elasticloadbalancingv2 as elbv2,
@@ -66,7 +64,7 @@ class GwlbStack(Stack):
         # Tags.of(self).add("APPLIANCE", "TEST")
 
         cidr_range = self.node.try_get_context("CidrRange")
-        # availability_zones = self.node.try_get_context("AvailabilityZones")
+        key_name = self.node.try_get_context("KeyName")
         max_azs = self.node.try_get_context("MaxAZs")
         subnet_configs = []
         subnet_cidr_mask = 27
@@ -146,6 +144,7 @@ class GwlbStack(Stack):
                     volume=ec2.BlockDeviceVolume.ebs(40, delete_on_termination=True),
                 )
             ],
+            key_name=key_name,
             # role
             security_group=template_sg,
             # user_data=user_data,
@@ -171,7 +170,9 @@ class GwlbStack(Stack):
                     assign_sids=True,
                     statements=[
                         iam.PolicyStatement(
-                            actions=["ec2:DescribeVpcEndpointServiceConfigurations"],
+                            actions=[
+                                "ec2:Describe*"
+                            ],  # ["ec2:DescribeVpcEndpointServiceConfigurations"],
                             effect=iam.Effect.ALLOW,
                             resources=["*"],  # maybe narrower
                         ),
@@ -202,7 +203,6 @@ class GwlbStack(Stack):
             name=f"GWLB-{self.stack_name}",
             type="gateway",
             subnets=appliance_subnet_ids,
-            scheme="internal",
             load_balancer_attributes=[
                 elbv2.CfnLoadBalancer.LoadBalancerAttributeProperty(
                     key="load_balancing.cross_zone.enabled", value="true"
@@ -250,6 +250,7 @@ class GwlbStack(Stack):
             health_check_timeout_seconds=5,
             healthy_threshold_count=3,
             port=geneve_port,
+            protocol="GENEVE",
             target_type="instance",
             unhealthy_threshold_count=3,
             vpc_id=vpc.vpc_id,
@@ -324,15 +325,6 @@ class GwlbStack(Stack):
             gateway_id=vpc.internet_gateway_id,
         )
 
-
-# INGRESS route to GWLBE
-# put GWLBEs in CHARLIE
-# put instances in DELTA
-# EGRESS default route to IGW, private CIDR route to GWLBE (edge route table)
-
-# extract the named subnets from the VPC
-
-# GWLB
-# GWLB endpoints
-# ASG
-# routing
+        # lifeycle hook
+        # functions
+        # custom resource to set the capacity at the right time

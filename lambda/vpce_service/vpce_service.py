@@ -33,7 +33,8 @@ def lambda_handler(event, context):
         logger.info("Retrieving VPC Endpoint Service Name:")
         try:
             response = ec2.describe_vpc_endpoint_service_configurations(
-                Filters=[{"Name": "service-id", "Values": [serviceid]}]
+                # Filters=[{"Name": "service-id", "Values": [serviceid]}]
+                ServiceIds=[serviceid]
             )
         except Exception as e:
             logger.info(

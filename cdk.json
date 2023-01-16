@@ -16,10 +16,9 @@
   },
   "context": {
     "AmiName": "AL2-GeneveProxy",
-    "AvailabilityZones": ["us-east-1a", "us-east-1b", "us-east-1c"],
-    "MaxAZs": 3,
+    "MaxAZs": 2,
     "CidrRange": "172.16.0.0/21",
-    "KeyName": "",
+    "KeyName": "pmr-iamadmin-use1",
 
 
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
