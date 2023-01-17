@@ -1,9 +1,13 @@
-import sys
+# https://www.sentiatechblog.com/geneveproxy-an-aws-gateway-load-balancer-reference-application
+# https://github.com/sentialabs/geneve-proxy
+# https://datatracker.ietf.org/doc/rfc8926/
+# https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#ImageDetails:imageId=ami-020a3162e09801a69
+
+
 from os.path import join
 import json
 from datetime import datetime, timezone
 
-import typing
 from aws_cdk import (
     Duration,
     Stack,
@@ -27,21 +31,6 @@ from constructs import Construct
 class GwlbStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
-
-        # cdk.json
-        #  subnet names
-        #  vpc-id
-        #  AZs
-        #  AMI = ami-020a3162e09801a69, AL2-GeneveProxy
-        # permission boundary
-
-        # to do
-        #  create VPC
-        #   subnets: egress (IGW), NAT, security, trusted
-        #  add CW logs agent to template, add permission to role
-        #  instance in trusted subnet, add SSM console access
-        #  lifecycle hooks
-        #     first just do init and terminate (not SFN)
 
         permissions_boundary_policy_arn = self.node.try_get_context(
             "PermissionsBoundaryPolicyArn"
@@ -70,7 +59,7 @@ class GwlbStack(Stack):
         # Tags.of(self).add("APPLIANCE", "TEST")
 
         cidr_range = self.node.try_get_context("CidrRange")
-        key_name = self.node.try_get_context("KeyName")
+        # key_name = self.node.try_get_context("KeyName")
         max_azs = self.node.try_get_context("MaxAZs")
         subnet_configs = []
         subnet_cidr_mask = 27
@@ -122,9 +111,7 @@ class GwlbStack(Stack):
             ec2.Peer.any_ipv4(), ec2.Port.tcp(geneve_port)
         )
         # trust all intra-VPC traffic
-        template_sg.connections.allow_from(
-            intra_vpc, ec2.Port.all_traffic()
-        )  # ec2.Port.tcp(22)
+        template_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
 
         # IAM policies
         # security group(s)
@@ -190,14 +177,18 @@ class GwlbStack(Stack):
         )
 
         # settings for all python Lambda functions
-        runtime = _lambda.Runtime.PYTHON_3_9
         lambda_root = "lambda"
-        log_retention = logs.RetentionDays.ONE_WEEK
         lambda_principal = iam.ServicePrincipal("lambda.amazonaws.com")
 
         basic_lambda_policy = iam.ManagedPolicy.from_aws_managed_policy_name(
             "service-role/AWSLambdaVPCAccessExecutionRole"
         )
+
+        lambda_settings = {
+            "log_retention": logs.RetentionDays.ONE_WEEK,
+            "runtime": _lambda.Runtime.PYTHON_3_9,
+            "timeout": Duration.seconds(60),
+        }
 
         service_role = iam.Role(
             self,
@@ -211,7 +202,6 @@ class GwlbStack(Stack):
                         iam.PolicyStatement(
                             actions=[
                                 "ec2:DescribeVpcEndpointServiceConfigurations",
-                                # "ec2:Describe*",
                             ],
                             effect=iam.Effect.ALLOW,
                             resources=["*"],  # maybe narrower
@@ -224,13 +214,14 @@ class GwlbStack(Stack):
         vpce_service_lambda = _lambda.Function(
             self,
             "VpceServiceLambda",
-            runtime=runtime,
+            **lambda_settings,
             code=_lambda.Code.from_asset(join(lambda_root, "vpce_service")),
             handler="vpce_service.lambda_handler",
-            # environment={**debug_env},
-            timeout=Duration.seconds(150),
             role=service_role,
-            log_retention=logs.RetentionDays.ONE_DAY,  # log_retention,
+            # environment={**debug_env},
+            # runtime=runtime,
+            # timeout=Duration.seconds(150),
+            # log_retention=logs.RetentionDays.ONE_DAY,  # log_retention,
         )
 
         appliance_subnets = vpc.select_subnets(subnet_group_name="APPLIANCE")
@@ -475,12 +466,6 @@ class GwlbStack(Stack):
                 )
             },
         )
-
-        lambda_settings = {
-            "log_retention": log_retention,
-            "runtime": runtime,
-            "timeout": Duration.seconds(60),
-        }
 
         # Make sure the launching rule and lambda are created before the ASG.
         # Bad things can happen if the ASG starts spinning up instances before the
