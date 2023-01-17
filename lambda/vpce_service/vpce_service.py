@@ -35,6 +35,7 @@ def lambda_handler(event, context):
             response = ec2.describe_vpc_endpoint_service_configurations(
                 ServiceIds=[serviceid]
             )
+            logger.info(json.dumps(response))
         except Exception as e:
             logger.info(
                 "ec2.describe_vpc_endpoint_service_configurations failure: {}".format(e)
