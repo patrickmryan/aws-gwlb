@@ -26,7 +26,7 @@ def send(
 ):
     responseUrl = event["ResponseURL"]
 
-    print(responseUrl)
+    print(json.dumps(event))   # (responseUrl)
 
     responseBody = {
         "Status": responseStatus,
