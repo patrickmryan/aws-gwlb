@@ -217,8 +217,9 @@ class GwlbStack(Stack):
             code=_lambda.Code.from_asset(join(lambda_root, "vpce_service")),
             handler="vpce_service.lambda_handler",
             role=service_role,
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_group_name="NAT"),
+            # https://docs.aws.amazon.com/lambda/latest/operatorguide/networking-vpc.html
+#             vpc=vpc,
+#             vpc_subnets=ec2.SubnetSelection(subnet_group_name="NAT"),
             **lambda_settings,
         )
 
