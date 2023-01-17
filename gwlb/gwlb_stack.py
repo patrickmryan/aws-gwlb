@@ -214,14 +214,12 @@ class GwlbStack(Stack):
         vpce_service_lambda = _lambda.Function(
             self,
             "VpceServiceLambda",
-            **lambda_settings,
             code=_lambda.Code.from_asset(join(lambda_root, "vpce_service")),
             handler="vpce_service.lambda_handler",
             role=service_role,
-            # environment={**debug_env},
-            # runtime=runtime,
-            # timeout=Duration.seconds(150),
-            # log_retention=logs.RetentionDays.ONE_DAY,  # log_retention,
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_group_name="NAT"),
+            **lambda_settings,
         )
 
         appliance_subnets = vpc.select_subnets(subnet_group_name="APPLIANCE")
