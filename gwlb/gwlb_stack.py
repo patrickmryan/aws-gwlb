@@ -201,7 +201,7 @@ class GwlbStack(Stack):
                     statements=[
                         iam.PolicyStatement(
                             actions=[
-                                "ec2:DescribeVpcEndpointServiceConfigurations",
+                                "ec2:DescribeVpcEndpointService*",
                             ],
                             effect=iam.Effect.ALLOW,
                             resources=["*"],  # maybe narrower
