@@ -311,7 +311,7 @@ class GwlbStack(Stack):
                 version=launch_template.latest_version_number,
             ),
             # cooldown="60",   #Duration.minutes(1),
-            desired_capacity="0",  # zero for a reason
+            # desired_capacity="0",  # zero for a reason
             min_size="0",
             max_size=str(max_azs * 2),
             health_check_type="EC2",
