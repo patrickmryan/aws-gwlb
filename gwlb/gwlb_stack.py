@@ -402,7 +402,7 @@ class GwlbStack(Stack):
                 "DesiredCapacity": max_azs,
             },
             physical_resource_id=cr.PhysicalResourceId.of(
-                "PutDesiredInstancesSetting" + datetime.now(timezone.utc).isoformat()
+                "PutDesiredInstancesSetting"  # + datetime.now(timezone.utc).isoformat()
             ),
         )
 
@@ -621,7 +621,8 @@ class GwlbStack(Stack):
                 ),
             },
             physical_resource_id=cr.PhysicalResourceId.of(
-                construct_id + "PutHookSetting" + datetime.now(timezone.utc).isoformat()
+                construct_id
+                + "PutHookSetting"  # + datetime.now(timezone.utc).isoformat()
             ),
         )
 
@@ -636,7 +637,7 @@ class GwlbStack(Stack):
                 # lifecycle_hook_name
                 construct_id
                 + "DeleteHookSetting"
-                + datetime.now(timezone.utc).isoformat()
+                # + datetime.now(timezone.utc).isoformat()
             ),
         )
 
