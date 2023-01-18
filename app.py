@@ -9,7 +9,7 @@ from gwlb.gwlb_stack import GwlbStack
 app = cdk.App()
 GwlbStack(
     app,
-    "GWLBStack",
+    "GwlbStack5",
     env=cdk.Environment(
         account=os.getenv("CDK_DEFAULT_ACCOUNT"), region=os.getenv("CDK_DEFAULT_REGION")
     ),

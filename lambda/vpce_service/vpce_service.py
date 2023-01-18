@@ -1,9 +1,10 @@
+import sys
 import json
 import logging
 import time
 import boto3
-import cfnresponse
 from botocore.exceptions import ClientError
+import cfnresponse
 
 
 def lambda_handler(event, context):
@@ -11,7 +12,11 @@ def lambda_handler(event, context):
     logger.setLevel(logging.INFO)
     logger.info("Received event: {}".format(json.dumps(event)))
 
-    ec2 = boto3.client("ec2")
+    try:
+        ec2 = boto3.client("ec2")
+    except ClientError as e:
+        logger.error(f"ERROR: failed to connect to EC2 client: {e}")
+        sys.exit(1)
 
     response_data = {}
     response_status = cfnresponse.FAILED
@@ -33,7 +38,7 @@ def lambda_handler(event, context):
         logger.info("Retrieving VPC Endpoint Service Name:")
         try:
             response = ec2.describe_vpc_endpoint_service_configurations(
-                ServiceIds=[serviceid]
+                Filters=[{"Name": "service-id", "Values": [serviceid]}]
             )
             logger.info(json.dumps(response))
         except Exception as e:
@@ -43,7 +48,7 @@ def lambda_handler(event, context):
 
         service_name = response["ServiceConfigurations"][0]["ServiceName"]
 
-        time.sleep(120)  # this seems weird
+        time.sleep(120)
 
         response_data["ServiceName"] = service_name
         response_status = cfnresponse.SUCCESS

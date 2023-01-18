@@ -4,6 +4,7 @@
 # https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#ImageDetails:imageId=ami-020a3162e09801a69
 
 
+import os
 from os.path import join
 import json
 from datetime import datetime, timezone
@@ -12,6 +13,9 @@ from aws_cdk import (
     Duration,
     Stack,
     Tags,
+    DockerImage,
+    DockerVolume,
+    BundlingOptions,
     RemovalPolicy,
     CustomResource,
     aws_ec2 as ec2,
@@ -184,9 +188,10 @@ class GwlbStack(Stack):
             "service-role/AWSLambdaVPCAccessExecutionRole"
         )
 
+        python_runtime = _lambda.Runtime.PYTHON_3_9
         lambda_settings = {
             "log_retention": logs.RetentionDays.ONE_WEEK,
-            "runtime": _lambda.Runtime.PYTHON_3_9,
+            "runtime": python_runtime,
             "timeout": Duration.seconds(60),
         }
 
@@ -194,7 +199,12 @@ class GwlbStack(Stack):
             self,
             "VpceServiceLambdaExecutionRole",
             assumed_by=lambda_principal,
-            managed_policies=[basic_lambda_policy],
+            managed_policies=[
+                basic_lambda_policy,
+                # iam.ManagedPolicy.from_aws_managed_policy_name(
+                #     "AmazonEC2FullAccess"
+                # )
+            ],
             inline_policies={
                 "ec2read": iam.PolicyDocument(
                     assign_sids=True,
@@ -211,18 +221,6 @@ class GwlbStack(Stack):
             },
         )
 
-        vpce_service_lambda = _lambda.Function(
-            self,
-            "VpceServiceLambda",
-            code=_lambda.Code.from_asset(join(lambda_root, "vpce_service")),
-            handler="vpce_service.lambda_handler",
-            role=service_role,
-            # https://docs.aws.amazon.com/lambda/latest/operatorguide/networking-vpc.html
-#             vpc=vpc,
-#             vpc_subnets=ec2.SubnetSelection(subnet_group_name="NAT"),
-            **lambda_settings,
-        )
-
         appliance_subnets = vpc.select_subnets(subnet_group_name="APPLIANCE")
         appliance_subnet_ids = appliance_subnets.subnet_ids
 
@@ -237,6 +235,22 @@ class GwlbStack(Stack):
                     key="load_balancing.cross_zone.enabled", value="true"
                 )
             ],
+        )
+
+        # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-lambda-function-code-cfnresponsemodule.html
+        vpce_service_lambda = _lambda.Function(
+            self,
+            "VpceServiceLambda",
+            code=_lambda.Code.from_asset(join(lambda_root, "vpce_service")),
+            handler="vpce_service.lambda_handler",
+            role=service_role,
+            # https://docs.aws.amazon.com/lambda/latest/operatorguide/networking-vpc.html
+            # vpc=vpc,
+            # vpc_subnets=ec2.SubnetSelection(subnet_group_name="NAT"),
+            # **lambda_settings,
+            log_retention=logs.RetentionDays.ONE_WEEK,
+            runtime=python_runtime,
+            timeout=Duration.seconds(240),
         )
 
         gw_endpoint_service = ec2.CfnVPCEndpointService(
@@ -424,7 +438,6 @@ class GwlbStack(Stack):
         )
 
         # cw logs for firewalls
-
         # now adding the lambda for the launching hook
 
         acct_instances_arn = self.format_arn(
@@ -479,7 +492,6 @@ class GwlbStack(Stack):
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
             lambda_settings=lambda_settings,
             lambda_handler="launching_hook.lambda_handler",
-            # lifecycle_hook_name="Launching",
             lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
             default_result="ABANDON",
         )
@@ -499,7 +511,6 @@ class GwlbStack(Stack):
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "terminating_hook")),
             lambda_settings=lambda_settings,
             lambda_handler="terminating_hook.lambda_handler",
-            # lifecycle_hook_name="Terminating",
             lifecycle_transition="autoscaling:EC2_INSTANCE_TERMINATING",
             default_result="CONTINUE",
         )
@@ -557,7 +568,7 @@ class GwlbStack(Stack):
         for n in range(len(subnets)):
             ec2.FlowLog(
                 self,
-                f"ApplianceFlowLog{n}",
+                f"ApplianceSubnetFlowLog{n}",
                 resource_type=ec2.FlowLogResourceType.from_subnet(subnets[n]),
                 destination=ec2.FlowLogDestination.to_cloud_watch_logs(
                     log_group, flow_log_role
@@ -576,7 +587,6 @@ class GwlbStack(Stack):
             self.launch_test_instance(
                 vpc=vpc,
                 vpc_subnets=ec2.SubnetSelection(subnet_group_name="TRUSTED"),
-                # key_name=None
             )
 
     def add_lifecycle_hook(
