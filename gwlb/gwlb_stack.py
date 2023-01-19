@@ -66,34 +66,38 @@ class GwlbStack(Stack):
         subnet_configs = []
         subnet_cidr_mask = 27
 
-        subnet_configs.append(
-            ec2.SubnetConfiguration(
-                name="EGRESS",
-                subnet_type=ec2.SubnetType.PUBLIC,
-                cidr_mask=subnet_cidr_mask,
-            )
+        config = ec2.SubnetConfiguration(
+            name="EGRESS",
+            subnet_type=ec2.SubnetType.PUBLIC,
+            cidr_mask=subnet_cidr_mask,
         )
-        subnet_configs.append(
-            ec2.SubnetConfiguration(
-                name="NAT",
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
-                cidr_mask=subnet_cidr_mask,
-            )
+        Tags.of(config).add("ROLE", "EGRESS")
+        subnet_configs.append(config)
+
+        config = ec2.SubnetConfiguration(
+            name="MANAGEMENT",
+            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+            cidr_mask=subnet_cidr_mask,
         )
-        subnet_configs.append(
-            ec2.SubnetConfiguration(
-                name="APPLIANCE",
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
-                cidr_mask=subnet_cidr_mask,
-            )
+        Tags.of(config).add("ROLE", "MANAGEMENT")
+        subnet_configs.append(config)
+
+        config = ec2.SubnetConfiguration(
+            name="DATA",
+            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+            cidr_mask=subnet_cidr_mask,
         )
-        subnet_configs.append(
-            ec2.SubnetConfiguration(
-                name="TRUSTED",
-                subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
-                cidr_mask=subnet_cidr_mask,
-            )
+        Tags.of(config).add("ROLE", "DATA")
+        subnet_configs.append(config)
+
+        config = ec2.SubnetConfiguration(
+            name="TRUSTED",
+            subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
+            cidr_mask=subnet_cidr_mask,
         )
+
+        Tags.of(config).add("ROLE", "TRUSTED")
+        subnet_configs.append(config)
 
         vpc = ec2.Vpc(
             self,
@@ -114,6 +118,11 @@ class GwlbStack(Stack):
         )
         # trust all intra-VPC traffic
         template_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
+        Tags.of(template_sg).add("ROLE", "DATA")
+
+        management_sg = ec2.SecurityGroup(self, "ManagementSG", vpc=vpc)
+        management_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
+        Tags.of(management_sg).add("ROLE", "MANAGEMENT")
 
         # IAM policies
         # security group(s)
@@ -325,7 +334,7 @@ systemctl start geneveproxy
             healthy_threshold_count=3,
             port=geneve_port,
             protocol="GENEVE",
-            target_type="instance",
+            target_type="ip",  # "instance",
             unhealthy_threshold_count=3,
             vpc_id=vpc.vpc_id,
         )
@@ -413,9 +422,9 @@ systemctl start geneveproxy
                 vpc.select_subnets(subnet_group_name="TRUSTED", availability_zones=[az])
             ).subnets
 
-            for n in range(len(subnets)):
+            for n, subnet in enumerate(subnets):
                 # add the outbound route
-                subnets[n].add_route(
+                subnet.add_route(
                     f"DefaultRouteFor-{az}-subnet-{n}",
                     router_id=vpce.ref,
                     router_type=ec2.RouterType.VPC_ENDPOINT,
@@ -427,7 +436,7 @@ systemctl start geneveproxy
                     f"EdgeRoute-{az}",
                     route_table_id=edge_route_table.attr_route_table_id,
                     vpc_endpoint_id=vpce.ref,
-                    destination_cidr_block=subnets[n].ipv4_cidr_block,
+                    destination_cidr_block=subnet.ipv4_cidr_block,
                 )
 
         # attach the edge route table to the VPC so that return traffic is
