@@ -1,0 +1,8 @@
+[Unit]
+Description=Geneve Proxy
+
+[Service]
+ExecStart=/usr/bin/sudo /usr/bin/bash /home/ec2-user/proxy.sh
+
+[Install]
+WantedBy=multi-user.target

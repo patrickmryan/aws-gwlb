@@ -13,9 +13,6 @@ from aws_cdk import (
     Duration,
     Stack,
     Tags,
-    DockerImage,
-    DockerVolume,
-    BundlingOptions,
     RemovalPolicy,
     CustomResource,
     aws_ec2 as ec2,
@@ -27,6 +24,8 @@ from aws_cdk import (
     aws_events_targets as events_targets,
     aws_logs as logs,
     aws_sns as sns,
+    aws_s3 as s3,
+    aws_s3_assets as s3_assets,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -63,7 +62,6 @@ class GwlbStack(Stack):
         # Tags.of(self).add("APPLIANCE", "TEST")
 
         cidr_range = self.node.try_get_context("CidrRange")
-        # key_name = self.node.try_get_context("KeyName")
         max_azs = self.node.try_get_context("MaxAZs")
         subnet_configs = []
         subnet_cidr_mask = 27
@@ -121,10 +119,50 @@ class GwlbStack(Stack):
         # security group(s)
         # launch template
 
-        ami_name = self.node.try_get_context("AmiName")
-        ami = ec2.MachineImage.lookup(name=ami_name)
+        # ami_name = self.node.try_get_context("AmiName")
+        # ami = ec2.MachineImage.lookup(name=ami_name)
+        ami = ec2.MachineImage.latest_amazon_linux(
+            generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
+        )
 
-        # role
+        # user data
+        # yum install git -y -q
+        # python3 -m pip install  PyYAML
+        # cd ~ec2-user
+        # copy asset
+        # git clone
+        # fix ownership, exec perms
+        # put service file in /etc/
+        # enable, start
+
+        assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
+
+        user_data = ec2.UserData.for_linux()
+        user_data.add_commands(
+            """
+
+yum install git -y -q
+python3 -m pip install PyYAML
+cd ~ec2-user
+git clone https://github.com/sentialabs/geneve-proxy.git
+"""
+        )
+        zip_file = user_data.add_s3_download_command(
+            bucket=assets.bucket, bucket_key=assets.s3_object_key
+        )
+
+        user_data.add_commands(
+            f"""
+unzip {zip_file}
+mv geneveproxy.service /etc/systemd/system
+chmod 700 proxy.sh
+chown -R ec2-user.ec2-user .
+systemctl enable geneveproxy
+systemctl start geneveproxy
+"""
+        )
+
+        # role for firewall instance
 
         instance_role = iam.Role(
             self,
@@ -157,10 +195,6 @@ class GwlbStack(Stack):
             },
         )
 
-        # enable CW logs access
-        # create CW log
-        # add code to user data
-
         launch_template = ec2.LaunchTemplate(
             self,
             "GeneveProxyServer",
@@ -177,7 +211,7 @@ class GwlbStack(Stack):
             # key_name=key_name,    # don't need this. SSM console is enabled.
             role=instance_role,
             security_group=template_sg,
-            # user_data=user_data,
+            user_data=user_data,
         )
 
         # settings for all python Lambda functions
@@ -201,9 +235,6 @@ class GwlbStack(Stack):
             assumed_by=lambda_principal,
             managed_policies=[
                 basic_lambda_policy,
-                # iam.ManagedPolicy.from_aws_managed_policy_name(
-                #     "AmazonEC2FullAccess"
-                # )
             ],
             inline_policies={
                 "ec2read": iam.PolicyDocument(
@@ -303,7 +334,10 @@ class GwlbStack(Stack):
         scaling_topic = sns.Topic(self, "AsgScalingEvent")
 
         asg_name = "gwlb-asg-" + self.stack_name
-        asg_arn = f"arn:{self.partition}:autoscaling:{self.region}:{self.account}:autoScalingGroup:*:autoScalingGroupName/{asg_name}"
+        asg_arn = (
+            f"arn:{self.partition}:autoscaling:{self.region}:"
+            + f"{self.account}:autoScalingGroup:*:autoScalingGroupName/{asg_name}"
+        )
 
         asg = autoscaling.CfnAutoScalingGroup(
             self,
@@ -599,7 +633,6 @@ class GwlbStack(Stack):
         lambda_code=None,
         lambda_settings={},
         lambda_handler=None,
-        # lifecycle_hook_name=None,
         lifecycle_transition=None,
         default_result=None,
     ):

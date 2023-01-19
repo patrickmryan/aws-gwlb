@@ -33,7 +33,8 @@ def lambda_handler(event, context):
         logger.info("calling autoscaling.complete_lifecycle_action")
         logger.info(json.dumps(params))
         response = autoscaling.complete_lifecycle_action(**params)
-        logger.info(response)
+        logger.info(json.dumps(response))
+
     except ClientError as e:
         message = "Error completing lifecycle action: {}".format(e)
         logger.error(message)
