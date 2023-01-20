@@ -1,3 +1,4 @@
+import os
 import json
 import boto3
 from botocore.exceptions import ClientError
@@ -101,15 +102,18 @@ def lambda_handler(event, context):
     try:
         result = ec2_client.describe_instances(InstanceIds=[instance_id])
         # there can only be one
-        inst = result["Reservations"][0]["Instances"][0]
-        vpc_id = inst["VpcId"]
-        az = inst["Placement"]["AvailabilityZone"]
+        inst_details = result["Reservations"][0]["Instances"][0]
+        vpc_id = inst_details["VpcId"]
+        az = inst_details["Placement"]["AvailabilityZone"]
+
     except ClientError as exc:
         message = f"could not describe instance {instance_id}: {exc}"
         print(message)
         raise exc
 
-    new_name = "firewall_" + (inst["PrivateIpAddress"]).replace(".", "_") + f"_{az}"
+    new_name = (
+        "firewall_" + (inst_details["PrivateIpAddress"]).replace(".", "_") + f"_{az}"
+    )
 
     # response = ec2_client.create_tags(
     #     Resources=[instance_id], Tags=[{"Key": "Name", "Value": new_name}]
@@ -118,9 +122,9 @@ def lambda_handler(event, context):
         ec2_client=ec2_client, instance_id=instance_id, name_tag=new_name
     )
 
-    response = ec2_client.describe_instances(InstanceIds=[instance_id])
-    inst_details = response["Reservations"][0]["Instances"][0]
-    az = inst_details["Placement"]["AvailabilityZone"]
+    # response = ec2_client.describe_instances(InstanceIds=[instance_id])
+    # inst_details = response["Reservations"][0]["Instances"][0]
+    # az = inst_details["Placement"]["AvailabilityZone"]
 
     # grab all the subnets for this AZ
     response = ec2_client.describe_subnets(
@@ -185,6 +189,35 @@ def lambda_handler(event, context):
             ROLE_KEY: "MANAGEMENT",
         },
     )
+
+    # register an interface with the GWLB
+
+    elb_client = boto3.client("elbv2")
+
+    geneve_port = 6081
+    device_index = 0
+    tg_arn = os.environ["TARGET_GROUP_ARN"]
+    eni = next(
+        (
+            intf
+            for intf in inst_details["NetworkInterfaces"]
+            if intf["Attachment"]["DeviceIndex"] == device_index
+        ),
+        None,
+    )
+    private_ip = eni["PrivateIpAddress"]
+
+    try:
+        response = elb_client.register_targets(
+            TargetGroupArn=tg_arn, Targets=[{"Id": private_ip, "Port": geneve_port}]
+        )
+    except ClientError as e:
+        print(e)
+        print(f"Error registering IP : {private_ip} to {tg_arn}")
+
+        # ABANDON event?
+
+        return None
 
     params = {
         "LifecycleHookName": event_detail["LifecycleHookName"],

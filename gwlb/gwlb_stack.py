@@ -268,15 +268,14 @@ systemctl start geneveproxy
             },
         )
 
-        data_subnets = vpc.select_subnets(subnet_group_name="DATA")
-        data_subnet_ids = data_subnets.subnet_ids
+        mgmt_subnets = vpc.select_subnets(subnet_group_name="MANAGEMENT")
 
         gwlb = elbv2.CfnLoadBalancer(
             self,
             "GatewayLoadBalancer",
             name=f"GWLB-{self.stack_name}",
             type="gateway",
-            subnets=data_subnet_ids,
+            subnets=mgmt_subnets.subnet_ids,
             load_balancer_attributes=[
                 elbv2.CfnLoadBalancer.LoadBalancerAttributeProperty(
                     key="load_balancing.cross_zone.enabled", value="true"
@@ -359,7 +358,7 @@ systemctl start geneveproxy
             self,
             "ASG",
             auto_scaling_group_name=asg_name,  # f"GWLB-ASG-{self.stack_name}",
-            vpc_zone_identifier=data_subnet_ids,
+            vpc_zone_identifier=mgmt_subnets.subnet_ids,
             launch_template=autoscaling.CfnAutoScalingGroup.LaunchTemplateSpecificationProperty(
                 launch_template_id=launch_template.launch_template_id,
                 version=launch_template.latest_version_number,
@@ -507,7 +506,7 @@ systemctl start geneveproxy
             assumed_by=lambda_principal,
             managed_policies=managed_policies,
             inline_policies={
-                "CompleteLaunch": iam.PolicyDocument(
+                "LaunchHookPolicies": iam.PolicyDocument(
                     assign_sids=True,
                     statements=[
                         iam.PolicyStatement(
@@ -517,7 +516,16 @@ systemctl start geneveproxy
                         ),
                         iam.PolicyStatement(
                             effect=iam.Effect.ALLOW,
-                            actions=["ec2:DescribeInstances"],
+                            actions=[
+                                "elasticloadbalancing:RegisterTargets",
+                                "elasticloadbalancing:DeregisterTargets",
+                            ],
+                            resources=["*"],
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            # actions=["ec2:Describe*", "ec2:*NetworkInterface*"],
+                            actions=["ec2:*"],
                             resources=["*"],
                         ),
                         iam.PolicyStatement(
@@ -621,7 +629,7 @@ systemctl start geneveproxy
             },
         )
 
-        subnets = data_subnets.subnets
+        subnets = mgmt_subnets.subnets
         for n in range(len(subnets)):
             ec2.FlowLog(
                 self,
