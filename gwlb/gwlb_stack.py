@@ -71,7 +71,7 @@ class GwlbStack(Stack):
             subnet_type=ec2.SubnetType.PUBLIC,
             cidr_mask=subnet_cidr_mask,
         )
-        Tags.of(config).add("ROLE", "EGRESS")
+        # Tags.of(config).add("ROLE", "EGRESS")
         subnet_configs.append(config)
 
         config = ec2.SubnetConfiguration(
@@ -79,7 +79,7 @@ class GwlbStack(Stack):
             subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
             cidr_mask=subnet_cidr_mask,
         )
-        Tags.of(config).add("ROLE", "MANAGEMENT")
+        # Tags.of(config).add("ROLE", "MANAGEMENT")
         subnet_configs.append(config)
 
         config = ec2.SubnetConfiguration(
@@ -87,7 +87,7 @@ class GwlbStack(Stack):
             subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
             cidr_mask=subnet_cidr_mask,
         )
-        Tags.of(config).add("ROLE", "DATA")
+        # Tags.of(config).add("ROLE", "DATA")
         subnet_configs.append(config)
 
         config = ec2.SubnetConfiguration(
@@ -96,7 +96,7 @@ class GwlbStack(Stack):
             cidr_mask=subnet_cidr_mask,
         )
 
-        Tags.of(config).add("ROLE", "TRUSTED")
+        # Tags.of(config).add("ROLE", "TRUSTED")
         subnet_configs.append(config)
 
         vpc = ec2.Vpc(
@@ -109,6 +109,13 @@ class GwlbStack(Stack):
             nat_gateway_provider=ec2.NatProvider.gateway(),
             subnet_configuration=subnet_configs,
         )
+
+        subnet_names = ["EGRESS", "DATA", "MANAGEMENT", "TRUSTED"]
+
+        for subnet_name in subnet_names:
+            subnets = (vpc.select_subnets(subnet_group_name=subnet_name)).subnets
+            for subnet in subnets:
+                Tags.of(subnet).add("ROLE", subnet_name)
 
         intra_vpc = ec2.Peer.ipv4(vpc.vpc_cidr_block)
         template_sg = ec2.SecurityGroup(self, "GeneveProxySG", vpc=vpc)
@@ -261,15 +268,15 @@ systemctl start geneveproxy
             },
         )
 
-        appliance_subnets = vpc.select_subnets(subnet_group_name="APPLIANCE")
-        appliance_subnet_ids = appliance_subnets.subnet_ids
+        data_subnets = vpc.select_subnets(subnet_group_name="DATA")
+        data_subnet_ids = data_subnets.subnet_ids
 
         gwlb = elbv2.CfnLoadBalancer(
             self,
             "GatewayLoadBalancer",
             name=f"GWLB-{self.stack_name}",
             type="gateway",
-            subnets=appliance_subnet_ids,
+            subnets=data_subnet_ids,
             load_balancer_attributes=[
                 elbv2.CfnLoadBalancer.LoadBalancerAttributeProperty(
                     key="load_balancing.cross_zone.enabled", value="true"
@@ -317,7 +324,7 @@ systemctl start geneveproxy
                 vpc_id=vpc.vpc_id,
                 subnet_ids=(
                     vpc.select_subnets(
-                        subnet_group_name="APPLIANCE", availability_zones=[az]
+                        subnet_group_name="DATA", availability_zones=[az]
                     )
                 ).subnet_ids,
                 vpc_endpoint_type="GatewayLoadBalancer",
@@ -352,7 +359,7 @@ systemctl start geneveproxy
             self,
             "ASG",
             auto_scaling_group_name=asg_name,  # f"GWLB-ASG-{self.stack_name}",
-            vpc_zone_identifier=appliance_subnet_ids,
+            vpc_zone_identifier=data_subnet_ids,
             launch_template=autoscaling.CfnAutoScalingGroup.LaunchTemplateSpecificationProperty(
                 launch_template_id=launch_template.launch_template_id,
                 version=launch_template.latest_version_number,
@@ -396,7 +403,8 @@ systemctl start geneveproxy
                     ],
                 )
             ],
-            target_group_arns=[target_group.ref],
+            # DISABLING because we're using ENIs, not instances.
+            # target_group_arns=[target_group.ref],
         )
 
         listener = elbv2.CfnListener(
@@ -526,6 +534,11 @@ systemctl start geneveproxy
         # Bad things can happen if the ASG starts spinning up instances before the
         # lifecycle hook lambdas and rules are deployed.
 
+        lambda_env = {
+            "TARGET_GROUP_ARN": target_group.ref,  # get_att('Arn'),
+            "GWLB_ARN": gwlb.ref,  # get_att('Arn')
+        }
+
         launching_rule = self.add_lifecycle_hook(
             construct_id="Launching",
             asg=asg,
@@ -535,6 +548,7 @@ systemctl start geneveproxy
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
             lambda_settings=lambda_settings,
             lambda_handler="launching_hook.lambda_handler",
+            lambda_env=lambda_env,
             lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
             default_result="ABANDON",
         )
@@ -563,7 +577,7 @@ systemctl start geneveproxy
         # set desired_instances AFTER the ASG, hook, lambda, and rule are all deployed.
         asg_update_resource.node.add_dependency(asg)
 
-        # VPC flow logs on APPLIANCE subnets.
+        # VPC flow logs on DATA subnets.
 
         log_group = logs.LogGroup(
             self,
@@ -607,11 +621,11 @@ systemctl start geneveproxy
             },
         )
 
-        subnets = appliance_subnets.subnets
+        subnets = data_subnets.subnets
         for n in range(len(subnets)):
             ec2.FlowLog(
                 self,
-                f"ApplianceSubnetFlowLog{n}",
+                f"DataSubnetFlowLog{n}",
                 resource_type=ec2.FlowLogResourceType.from_subnet(subnets[n]),
                 destination=ec2.FlowLogDestination.to_cloud_watch_logs(
                     log_group, flow_log_role
@@ -641,6 +655,7 @@ systemctl start geneveproxy
         lifecycle_hook_role=None,
         lambda_code=None,
         lambda_settings={},
+        lambda_env={},
         lambda_handler=None,
         lifecycle_transition=None,
         default_result=None,
@@ -652,6 +667,7 @@ systemctl start geneveproxy
             code=lambda_code,
             handler=lambda_handler,
             role=lifecycle_hook_role,
+            environment=lambda_env,
             **lambda_settings,
         )
 
