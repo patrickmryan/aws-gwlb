@@ -576,6 +576,7 @@ systemctl start geneveproxy
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "terminating_hook")),
             lambda_settings=lambda_settings,
             lambda_handler="terminating_hook.lambda_handler",
+            lambda_env=lambda_env,
             lifecycle_transition="autoscaling:EC2_INSTANCE_TERMINATING",
             default_result="CONTINUE",
         )

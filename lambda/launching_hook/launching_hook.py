@@ -1,6 +1,7 @@
 import os
 import json
 import boto3
+from datetime import datetime
 from botocore.exceptions import ClientError
 
 DEVICE_INDEX_MANAGEMENT = 0  # eth0
@@ -13,6 +14,11 @@ ROLE_KEY = "ROLE"
 
 MANAGEMENT_TAG = "MANAGEMENT"
 DATA_TAG = "DATA"
+
+
+def stringify(o):
+    # hack around the fact that datetime does not have a JSON converter
+    return o.__str__() if isinstance(o, datetime) else o
 
 
 def select_resources_with_tag(resources, tag_key, tag_value=""):
@@ -101,6 +107,7 @@ def lambda_handler(event, context):
     instance_id = event_detail["EC2InstanceId"]
     try:
         result = ec2_client.describe_instances(InstanceIds=[instance_id])
+        print(json.dumps(result, default=stringify))
         # there can only be one
         inst_details = result["Reservations"][0]["Instances"][0]
         vpc_id = inst_details["VpcId"]
@@ -115,16 +122,9 @@ def lambda_handler(event, context):
         "firewall_" + (inst_details["PrivateIpAddress"]).replace(".", "_") + f"_{az}"
     )
 
-    # response = ec2_client.create_tags(
-    #     Resources=[instance_id], Tags=[{"Key": "Name", "Value": new_name}]
-    # )
     response = update_name_tag(
         ec2_client=ec2_client, instance_id=instance_id, name_tag=new_name
     )
-
-    # response = ec2_client.describe_instances(InstanceIds=[instance_id])
-    # inst_details = response["Reservations"][0]["Instances"][0]
-    # az = inst_details["Placement"]["AvailabilityZone"]
 
     # grab all the subnets for this AZ
     response = ec2_client.describe_subnets(
@@ -158,7 +158,7 @@ def lambda_handler(event, context):
     response = ec2_client.describe_security_groups(
         Filters=[
             {"Name": "vpc-id", "Values": [vpc_id]},
-            {"Name": "tag-key", "Values": [ROLE_KEY]},  # resource_tags
+            {"Name": "tag-key", "Values": [ROLE_KEY]},
         ],
         DryRun=False,
     )
