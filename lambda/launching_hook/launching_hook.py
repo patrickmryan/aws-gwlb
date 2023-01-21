@@ -5,9 +5,12 @@ from datetime import datetime
 from botocore.exceptions import ClientError
 
 DEVICE_INDEX_MANAGEMENT = 0  # eth0
-DEVICE_INDEX_DIAGNOSTIC = 1  # eth1
-DEVICE_INDEX_EGRESS = 2  # eth2, GigEthernet0/0
-DEVICE_INDEX_INGRESS = 3  # eth3, GigEthernet0/1
+DEVICE_INDEX_DATA = 1  # eth1
+
+# DEVICE_INDEX_MANAGEMENT = 0  # eth0
+# DEVICE_INDEX_DIAGNOSTIC = 1  # eth1
+# DEVICE_INDEX_EGRESS = 2  # eth2, GigEthernet0/0
+# DEVICE_INDEX_INGRESS = 3  # eth3, GigEthernet0/1
 
 # put these in SSM param
 ROLE_KEY = "ROLE"

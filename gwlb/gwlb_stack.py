@@ -26,6 +26,7 @@ from aws_cdk import (
     aws_sns as sns,
     aws_s3 as s3,
     aws_s3_assets as s3_assets,
+    aws_ssm as ssm,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -66,37 +67,38 @@ class GwlbStack(Stack):
         subnet_configs = []
         subnet_cidr_mask = 27
 
+        subnet_names = ["egress", "data", "management", "trusted"]
+        data_subnet_name = (
+            "data"  # subnet used for data interface ENIs and VPC endpoints
+        )
+
         config = ec2.SubnetConfiguration(
-            name="EGRESS",
+            name="egress",
             subnet_type=ec2.SubnetType.PUBLIC,
             cidr_mask=subnet_cidr_mask,
         )
-        # Tags.of(config).add("ROLE", "EGRESS")
         subnet_configs.append(config)
 
         config = ec2.SubnetConfiguration(
-            name="MANAGEMENT",
+            name="management",
             subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
             cidr_mask=subnet_cidr_mask,
         )
-        # Tags.of(config).add("ROLE", "MANAGEMENT")
         subnet_configs.append(config)
 
         config = ec2.SubnetConfiguration(
-            name="DATA",
+            name="data",
             subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
             cidr_mask=subnet_cidr_mask,
         )
-        # Tags.of(config).add("ROLE", "DATA")
         subnet_configs.append(config)
 
         config = ec2.SubnetConfiguration(
-            name="TRUSTED",
+            name="trusted",
             subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
             cidr_mask=subnet_cidr_mask,
         )
 
-        # Tags.of(config).add("ROLE", "TRUSTED")
         subnet_configs.append(config)
 
         vpc = ec2.Vpc(
@@ -110,7 +112,12 @@ class GwlbStack(Stack):
             subnet_configuration=subnet_configs,
         )
 
-        subnet_names = ["EGRESS", "DATA", "MANAGEMENT", "TRUSTED"]
+        network_interface_config = self.node.try_get_context("NetworkInterfaceConfig")
+        network_ssm_param = ssm.StringParameter(
+            self,
+            "NetworkInterfaceConfig",
+            string_value=json.dumps(network_interface_config, indent=2),
+        )
 
         for subnet_name in subnet_names:
             subnets = (vpc.select_subnets(subnet_group_name=subnet_name)).subnets
@@ -125,32 +132,19 @@ class GwlbStack(Stack):
         )
         # trust all intra-VPC traffic
         template_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
-        Tags.of(template_sg).add("ROLE", "DATA")
+        Tags.of(template_sg).add("ROLE", "data")
 
         management_sg = ec2.SecurityGroup(self, "ManagementSG", vpc=vpc)
         management_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
-        Tags.of(management_sg).add("ROLE", "MANAGEMENT")
+        Tags.of(management_sg).add("ROLE", "management")
 
         # IAM policies
         # security group(s)
         # launch template
 
-        # ami_name = self.node.try_get_context("AmiName")
-        # ami = ec2.MachineImage.lookup(name=ami_name)
         ami = ec2.MachineImage.latest_amazon_linux(
             generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
         )
-
-        # user data
-        # yum install git -y -q
-        # python3 -m pip install  PyYAML
-        # cd ~ec2-user
-        # copy asset
-        # git clone
-        # fix ownership, exec perms
-        # put service file in /etc/
-        # enable, start
-
         assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
 
         user_data = ec2.UserData.for_linux()
@@ -179,7 +173,6 @@ systemctl start geneveproxy
         )
 
         # role for firewall instance
-
         instance_role = iam.Role(
             self,
             "FirewallInstanceRole",
@@ -268,7 +261,7 @@ systemctl start geneveproxy
             },
         )
 
-        mgmt_subnets = vpc.select_subnets(subnet_group_name="MANAGEMENT")
+        mgmt_subnets = vpc.select_subnets(subnet_group_name="management")
 
         gwlb = elbv2.CfnLoadBalancer(
             self,
@@ -291,10 +284,7 @@ systemctl start geneveproxy
             handler="vpce_service.lambda_handler",
             role=service_role,
             # https://docs.aws.amazon.com/lambda/latest/operatorguide/networking-vpc.html
-            # vpc=vpc,
-            # vpc_subnets=ec2.SubnetSelection(subnet_group_name="NAT"),
-            # **lambda_settings,
-            log_retention=logs.RetentionDays.ONE_WEEK,
+            log_retention=logs.RetentionDays.ONE_DAY,
             runtime=python_runtime,
             timeout=Duration.seconds(240),
         )
@@ -323,7 +313,7 @@ systemctl start geneveproxy
                 vpc_id=vpc.vpc_id,
                 subnet_ids=(
                     vpc.select_subnets(
-                        subnet_group_name="DATA", availability_zones=[az]
+                        subnet_group_name=data_subnet_name, availability_zones=[az]
                     )
                 ).subnet_ids,
                 vpc_endpoint_type="GatewayLoadBalancer",
@@ -374,18 +364,10 @@ systemctl start geneveproxy
                 autoscaling.CfnAutoScalingGroup.MetricsCollectionProperty(
                     granularity="1Minute",
                     metrics=[
-                        # "GroupMinSize",
-                        # "GroupMaxSize",
                         "GroupDesiredCapacity",
                         "GroupInServiceInstances",
-                        # "GroupPendingInstances",
-                        # "GroupStandbyInstances",
                         "GroupTerminatingInstances",
                         "GroupTotalInstances",
-                        # "GroupInServiceCapacity",
-                        # "GroupPendingCapacity",
-                        # "GroupStandbyCapacity",
-                        # "GroupTerminatingCapacity",
                         "GroupTotalCapacity",
                     ],
                 )
@@ -426,7 +408,7 @@ systemctl start geneveproxy
         for az, vpce in vpc_endpoints.items():
 
             subnets = (
-                vpc.select_subnets(subnet_group_name="TRUSTED", availability_zones=[az])
+                vpc.select_subnets(subnet_group_name="trusted", availability_zones=[az])
             ).subnets
 
             for n, subnet in enumerate(subnets):
@@ -466,9 +448,7 @@ systemctl start geneveproxy
                 "AutoScalingGroupName": asg_name,
                 "DesiredCapacity": max_azs,
             },
-            physical_resource_id=cr.PhysicalResourceId.of(
-                "PutDesiredInstancesSetting"  # + datetime.now(timezone.utc).isoformat()
-            ),
+            physical_resource_id=cr.PhysicalResourceId.of("PutDesiredInstancesSetting"),
         )
 
         asg_update_resource = cr.AwsCustomResource(
@@ -525,7 +505,7 @@ systemctl start geneveproxy
                         iam.PolicyStatement(
                             effect=iam.Effect.ALLOW,
                             # actions=["ec2:Describe*", "ec2:*NetworkInterface*"],
-                            actions=["ec2:*"],
+                            actions=["ec2:*"],  # need to narrow this down
                             resources=["*"],
                         ),
                         iam.PolicyStatement(
@@ -537,14 +517,17 @@ systemctl start geneveproxy
                 )
             },
         )
+        network_ssm_param.grant_read(lifecycle_hook_role)
 
         # Make sure the launching rule and lambda are created before the ASG.
         # Bad things can happen if the ASG starts spinning up instances before the
         # lifecycle hook lambdas and rules are deployed.
 
+        # Now set up the lifecycle hooks for launching and terminating events.
+
         lambda_env = {
-            "TARGET_GROUP_ARN": target_group.ref,  # get_att('Arn'),
-            "GWLB_ARN": gwlb.ref,  # get_att('Arn')
+            "TARGET_GROUP_ARN": target_group.ref,
+            "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
         }
 
         launching_rule = self.add_lifecycle_hook(
@@ -652,7 +635,7 @@ systemctl start geneveproxy
         if launch_test_instance_param:
             self.launch_test_instance(
                 vpc=vpc,
-                vpc_subnets=ec2.SubnetSelection(subnet_group_name="TRUSTED"),
+                vpc_subnets=ec2.SubnetSelection(subnet_group_name="trusted"),
             )
 
     def add_lifecycle_hook(

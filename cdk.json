@@ -15,14 +15,22 @@
     ]
   },
   "context": {
-    "AmiName": "AL2-GeneveProxy",
     "MaxAZs": 2,
     "CidrRange": "172.16.0.0/21",
-    "KeyName": "pmr-iamadmin-use1",
     "LaunchTestInstance": true,
-
+    "NetworkInterfaceConfig": {
+      "0": {
+        "Name": "management",
+        "SourceDestCheck": true,
+        "IsTarget": false
+      },
+      "1": {
+        "Name": "data",
+        "SourceDestCheck": false,
+        "IsTarget": true
+      }
+    },
     "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
-
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [
