@@ -357,7 +357,7 @@ systemctl start geneveproxy
         asg = autoscaling.CfnAutoScalingGroup(
             self,
             "ASG",
-            auto_scaling_group_name=asg_name,  # f"GWLB-ASG-{self.stack_name}",
+            auto_scaling_group_name=asg_name,
             vpc_zone_identifier=mgmt_subnets.subnet_ids,
             launch_template=autoscaling.CfnAutoScalingGroup.LaunchTemplateSpecificationProperty(
                 launch_template_id=launch_template.launch_template_id,

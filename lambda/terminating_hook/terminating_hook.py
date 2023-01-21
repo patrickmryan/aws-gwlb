@@ -1,11 +1,17 @@
 import json
 import logging
 import os
+from datetime import datetime
 import boto3
 import botocore
 from botocore.exceptions import ClientError
 
 # need design patterny approach to handling each type of lifecycle action
+
+
+def stringify(o):
+    # hack around the fact that datetime does not have a JSON converter
+    return o.__str__() if isinstance(o, datetime) else o
 
 
 def lambda_handler(event, context):
@@ -24,31 +30,28 @@ def lambda_handler(event, context):
         result = ec2_client.describe_instances(InstanceIds=[instance_id])
         # there can only be one
         inst_details = result["Reservations"][0]["Instances"][0]
+        logger.info(json.dumps(inst_details, default=stringify))
 
     except ClientError as exc:
         message = f"could not describe instance {instance_id}: {exc}"
-        print(message)
+        logger.error(message)
         raise exc
 
     elb_client = boto3.client("elbv2")
 
     geneve_port = 6081
-    device_index = 0
     tg_arn = os.environ["TARGET_GROUP_ARN"]
-    eni = [
-        intf
-        for intf in inst_details["NetworkInterfaces"]
-        if intf["Attachment"]["DeviceIndex"] == device_index
-    ]
-    private_ip = eni["PrivateIpAddress"]
+    tags = {tag["Key"]: tag["Value"] for tag in inst_details["Tags"]}
+    private_ip = tags["TARGET_IP"]
 
     try:
+        logger.info(f"deregistering {private_ip} from {tg_arn}")
         response = elb_client.deregister_targets(
             TargetGroupArn=tg_arn, Targets=[{"Id": private_ip, "Port": geneve_port}]
         )
     except ClientError as e:
-        print(e)
-        print(f"Error deregistering IP : {private_ip} to {tg_arn}")
+        logger.error(e)
+        logger.error(f"Error deregistering IP : {private_ip} to {tg_arn}")
 
         # allow the terminating event to complete
 

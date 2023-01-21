@@ -137,21 +137,21 @@ def lambda_handler(event, context):
     )
     vpc_subnets = response["Subnets"]
     # extract the mgmt subnet for this AZ
-    mgmt_tag = MANAGEMENT_TAG
+    role_value = DATA_TAG
     subnets = select_resources_with_tag(
-        vpc_subnets, tag_key=ROLE_KEY, tag_value=mgmt_tag
+        vpc_subnets, tag_key=ROLE_KEY, tag_value=role_value
     )
 
     if len(subnets) != 1:
         message = (
-            f"expected to find one subnet with tag {ROLE_KEY}={mgmt_tag} in VPC {vpc_id}, AZ {az}, found "
+            f"expected to find one subnet with tag {ROLE_KEY}={role_value} in VPC {vpc_id}, AZ {az}, found "
             + str(len(subnets))
             + " instead"
         )
         print(message)
         raise Exception(message)
 
-    mgmt_subnet_id = subnets[0]["SubnetId"]
+    subnet_id = subnets[0]["SubnetId"]
 
     # extract the security groups for this AZ
 
@@ -163,34 +163,38 @@ def lambda_handler(event, context):
         DryRun=False,
     )
     ftd_groups = response["SecurityGroups"]
-    groups = select_resources_with_tag(ftd_groups, tag_key=ROLE_KEY, tag_value=mgmt_tag)
+    groups = select_resources_with_tag(
+        ftd_groups, tag_key=ROLE_KEY, tag_value=role_value
+    )
     if not groups:
-        message = f"could not find security groups with tag {mgmt_tag} in VPC {vpc_id}"
+        message = (
+            f"could not find security groups with tag {role_value} in VPC {vpc_id}"
+        )
         raise Exception(message)
 
-    mgmt_security_groups = [group["GroupId"] for group in groups]
+    security_groups = [group["GroupId"] for group in groups]
 
     # create another ENI
     # attach the ENI
     # tag the ENI
 
     index = 1
-    description = "management"
+    description = role_value.lower()
     create_attach_eni(
         ec2_client=ec2_client,
-        source_dest_flag=True,
+        source_dest_flag=False,
         instance_id=instance_id,
-        subnet_id=mgmt_subnet_id,
-        security_groups=mgmt_security_groups,
+        subnet_id=subnet_id,
+        security_groups=security_groups,
         device_index=index,
         description=description,
         tags={
             "Name": f"eth{index} - {description} {az} {instance_id}",
-            ROLE_KEY: "MANAGEMENT",
+            ROLE_KEY: role_value,
         },
     )
 
-    # register an interface with the GWLB
+    # register the data interface with the GWLB
 
     elb_client = boto3.client("elbv2")
 
@@ -218,6 +222,10 @@ def lambda_handler(event, context):
         # ABANDON event?
 
         return None
+
+    response = ec2_client.create_tags(
+        Resources=[instance_id], Tags=[{"Key": "TARGET_IP", "Value": private_ip}]
+    )
 
     params = {
         "LifecycleHookName": event_detail["LifecycleHookName"],
