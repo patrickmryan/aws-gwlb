@@ -17,19 +17,22 @@
   "context": {
     "MaxAZs": 2,
     "CidrRange": "172.16.0.0/21",
-    "LaunchTestInstance": true,
     "NetworkInterfaceConfig": {
       "0": {
-        "Name": "management",
+        "ROLE": "management",
         "SourceDestCheck": true,
         "IsTarget": false
       },
       "1": {
-        "Name": "data",
+        "ROLE": "data",
         "SourceDestCheck": false,
         "IsTarget": true
       }
     },
+
+    "LaunchTestInstance": true,
+    "NotificationsEmailAddress": "",
+
     "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,

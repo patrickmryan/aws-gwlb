@@ -15,8 +15,8 @@ DEVICE_INDEX_DATA = 1  # eth1
 # put these in SSM param
 ROLE_KEY = "ROLE"
 
-MANAGEMENT_TAG = "MANAGEMENT"
-DATA_TAG = "DATA"
+MANAGEMENT_TAG = "management"
+DATA_TAG = "data"
 
 
 def stringify(o):
@@ -56,6 +56,7 @@ def create_attach_eni(
 
     print(f"creating eth{device_index} for {instance_id} in {subnet_id}")
 
+    new_interface = None
     try:
         response = ec2_client.create_network_interface(
             SubnetId=subnet_id,
@@ -63,6 +64,7 @@ def create_attach_eni(
             Description=description,
             TagSpecifications=[tag_param],
         )
+        new_interface = response["NetworkInterface"]
 
         eni_id = response["NetworkInterface"]["NetworkInterfaceId"]
         response = ec2_client.attach_network_interface(
@@ -87,22 +89,40 @@ def create_attach_eni(
         )
         raise client_error
 
+    return new_interface
 
-def update_name_tag(ec2_client=None, instance_id="", name_tag=""):
 
-    response = ec2_client.create_tags(
-        Resources=[instance_id], Tags=[{"Key": "Name", "Value": name_tag}]
-    )
+def create_tags(ec2_client=None, resource_id="", tags={}):
+
+    tag_list = [{"Key": key, "Value": value} for key, value in tags.items()]
+    response = ec2_client.create_tags(Resources=[resource_id], Tags=tag_list)
     return response
 
 
 def lambda_handler(event, context):
 
     print(json.dumps(event))
+    event_detail = event["detail"]
 
     ec2_client = boto3.client("ec2")
     autoscaling = boto3.client("autoscaling")
-    event_detail = event["detail"]
+    ssm_client = boto3.client("ssm")
+
+    resp = ssm_client.get_parameter(
+        Name=os.environ["NETWORK_CONFIGURATION_SSM_PARAM"], WithDecryption=True
+    )
+    network_configuration_param = json.loads(resp["Parameter"]["Value"])
+
+    # convert the above into a list
+    network_configs = [None] * len(network_configuration_param.keys())
+    for index_string, config in network_configuration_param.items():
+        device_index = int(index_string)
+
+        # convert strings to boolean
+        # config["SourceDestCheck"] = eval(config["SourceDestCheck"].capitalize())
+        # config["IsTarget"] = eval(config["IsTarget"].capitalize())
+
+        network_configs[device_index] = config
 
     # need to introspect some info about the instance
     result = None
@@ -125,94 +145,122 @@ def lambda_handler(event, context):
         "firewall_" + (inst_details["PrivateIpAddress"]).replace(".", "_") + f"_{az}"
     )
 
-    response = update_name_tag(
-        ec2_client=ec2_client, instance_id=instance_id, name_tag=new_name
+    create_tags(ec2_client=ec2_client, resource_id=instance_id, tags={"Name": new_name})
+
+    primary_eni = next(
+        (
+            intf
+            for intf in inst_details["NetworkInterfaces"]
+            if intf["Attachment"]["DeviceIndex"] == 0
+        ),
+        None,
     )
+    # tag the primary ENI
+    role_value = network_configs[0][ROLE_KEY]
+    create_tags(
+        ec2_client=ec2_client,
+        resource_id=primary_eni,
+        tags={"Name": f"eth0 - {role_value} {az} {instance_id}", ROLE_KEY: role_value},
+    )
+    # at this point, there should still only be one interface, the primary one
+    # that was created in the launch template
+    network_configs[0]["NetworkInterface"] = inst_details["NetworkInterfaces"][0]
 
     # grab all the subnets for this AZ
     response = ec2_client.describe_subnets(
         Filters=[
             {"Name": "vpc-id", "Values": [vpc_id]},
             {"Name": "availability-zone", "Values": [az]},
-            {"Name": "tag-key", "Values": [ROLE_KEY]},  # resource_tags
-        ],
-        DryRun=False,
-    )
-    vpc_subnets = response["Subnets"]
-    # extract the mgmt subnet for this AZ
-    role_value = DATA_TAG
-    subnets = select_resources_with_tag(
-        vpc_subnets, tag_key=ROLE_KEY, tag_value=role_value
-    )
-
-    if len(subnets) != 1:
-        message = (
-            f"expected to find one subnet with tag {ROLE_KEY}={role_value} in VPC {vpc_id}, AZ {az}, found "
-            + str(len(subnets))
-            + " instead"
-        )
-        print(message)
-        raise Exception(message)
-
-    subnet_id = subnets[0]["SubnetId"]
-
-    # extract the security groups for this AZ
-
-    response = ec2_client.describe_security_groups(
-        Filters=[
-            {"Name": "vpc-id", "Values": [vpc_id]},
             {"Name": "tag-key", "Values": [ROLE_KEY]},
         ],
         DryRun=False,
     )
-    ftd_groups = response["SecurityGroups"]
-    groups = select_resources_with_tag(
-        ftd_groups, tag_key=ROLE_KEY, tag_value=role_value
-    )
-    if not groups:
-        message = (
-            f"could not find security groups with tag {role_value} in VPC {vpc_id}"
+    vpc_subnets = response["Subnets"]
+
+    # now add all the additional ENIs
+    for device_index, config in enumerate(network_configs[1:]):
+
+        # more to fix below
+
+        # extract the mgmt subnet for this AZ
+        role_value = DATA_TAG
+        subnets = select_resources_with_tag(
+            vpc_subnets, tag_key=ROLE_KEY, tag_value=role_value
         )
-        raise Exception(message)
 
-    security_groups = [group["GroupId"] for group in groups]
+        if len(subnets) != 1:
+            message = (
+                f"expected to find one subnet with tag {ROLE_KEY}={role_value} in VPC {vpc_id}, AZ {az}, found "
+                + str(len(subnets))
+                + " instead"
+            )
+            print(message)
+            raise Exception(message)
 
-    # create another ENI
-    # attach the ENI
-    # tag the ENI
+        subnet_id = subnets[0]["SubnetId"]
 
-    index = 1
-    description = role_value.lower()
-    create_attach_eni(
-        ec2_client=ec2_client,
-        source_dest_flag=False,
-        instance_id=instance_id,
-        subnet_id=subnet_id,
-        security_groups=security_groups,
-        device_index=index,
-        description=description,
-        tags={
-            "Name": f"eth{index} - {description} {az} {instance_id}",
-            ROLE_KEY: role_value,
-        },
-    )
+        # extract the security groups for this AZ
+
+        response = ec2_client.describe_security_groups(
+            Filters=[
+                {"Name": "vpc-id", "Values": [vpc_id]},
+                {"Name": "tag-key", "Values": [ROLE_KEY]},
+            ],
+            DryRun=False,
+        )
+        security_groups = response["SecurityGroups"]
+        groups = select_resources_with_tag(
+            security_groups, tag_key=ROLE_KEY, tag_value=role_value
+        )
+        if not groups:
+            message = (
+                f"could not find security groups with tag {role_value} in VPC {vpc_id}"
+            )
+            raise Exception(message)
+
+        security_groups = [group["GroupId"] for group in groups]
+
+        # create another ENI
+        # attach the ENI
+        # tag the ENI
+
+        index = int(device_index)
+        description = config[ROLE_KEY]
+        eni = create_attach_eni(
+            ec2_client=ec2_client,
+            source_dest_flag=config["SourceDestCheck"],
+            instance_id=instance_id,
+            subnet_id=subnet_id,
+            security_groups=security_groups,
+            device_index=index,
+            description=description,
+            tags={
+                "Name": f"eth{index} - {description} {az} {instance_id}",
+                ROLE_KEY: role_value,
+            },
+        )
+        network_configs[index]["NetworkInterfaceId"] = eni
 
     # register the data interface with the GWLB
 
     elb_client = boto3.client("elbv2")
-
     geneve_port = 6081
-    device_index = 0
-    tg_arn = os.environ["TARGET_GROUP_ARN"]
-    eni = next(
-        (
-            intf
-            for intf in inst_details["NetworkInterfaces"]
-            if intf["Attachment"]["DeviceIndex"] == device_index
-        ),
+
+    target_index = next(
+        (index for index, config in enumerate(network_configs) if config["IsTarget"]),
         None,
     )
-    private_ip = eni["PrivateIpAddress"]
+
+    tg_arn = os.environ["TARGET_GROUP_ARN"]
+    # eni = next(
+    #     (
+    #         intf
+    #         for intf in inst_details["NetworkInterfaces"]
+    #         if intf["Attachment"]["DeviceIndex"] == target_index
+    #     ),
+    #     None,
+    # )
+    private_ip = network_configs[target_index]["PrivateIpAddress"]
 
     try:
         response = elb_client.register_targets(
@@ -226,6 +274,8 @@ def lambda_handler(event, context):
 
         return None
 
+    # record the target IP in a tag on the instance. we'll need the info
+    # when the instance terminates.
     response = ec2_client.create_tags(
         Resources=[instance_id], Tags=[{"Key": "TARGET_IP", "Value": private_ip}]
     )

@@ -22,6 +22,11 @@ def lambda_handler(event, context):
     logger.info(json.dumps(event))
     event_detail = event["detail"]
 
+    # ssm_client = boto3.client("ssm")
+
+    # resp = ssm_client.get_parameter(Name=os.environ['NETWORK_CONFIGURATION_SSM_PARAM'], WithDecryption=True)
+    # network_configuration = json.loads(resp["Parameter"]["Value"])
+
     # need to introspect some info about the instance
     result = None
     ec2_client = boto3.client("ec2")
