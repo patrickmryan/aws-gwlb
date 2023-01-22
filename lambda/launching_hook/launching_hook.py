@@ -7,16 +7,8 @@ from botocore.exceptions import ClientError
 DEVICE_INDEX_MANAGEMENT = 0  # eth0
 DEVICE_INDEX_DATA = 1  # eth1
 
-# DEVICE_INDEX_MANAGEMENT = 0  # eth0
-# DEVICE_INDEX_DIAGNOSTIC = 1  # eth1
-# DEVICE_INDEX_EGRESS = 2  # eth2, GigEthernet0/0
-# DEVICE_INDEX_INGRESS = 3  # eth3, GigEthernet0/1
-
 # put these in SSM param
 ROLE_KEY = "ROLE"
-
-MANAGEMENT_TAG = "management"
-DATA_TAG = "data"
 
 
 def stringify(o):
@@ -99,6 +91,27 @@ def create_tags(ec2_client=None, resource_id="", tags={}):
     return response
 
 
+def abandon_instance(event_detail={}, autoscaling=None):
+
+    params = {
+        "LifecycleHookName": event_detail["LifecycleHookName"],
+        "AutoScalingGroupName": event_detail["AutoScalingGroupName"],
+        "LifecycleActionToken": event_detail["LifecycleActionToken"],
+        "LifecycleActionResult": "ABANDON",
+        "InstanceId": event_detail["EC2InstanceId"],
+    }
+    print(f"calling autoscaling.complete_lifecycle_action({params})")
+
+    try:
+        print(json.dumps(params))
+        response = autoscaling.complete_lifecycle_action(**params)
+    except ClientError as e:
+        message = "Error completing lifecycle action: {}".format(e)
+        print(message)
+
+    return response
+
+
 def lambda_handler(event, context):
 
     print(json.dumps(event))
@@ -115,13 +128,10 @@ def lambda_handler(event, context):
 
     # convert the above into a list
     network_configs = [None] * len(network_configuration_param.keys())
+    network_interfaces = [None] * len(network_configuration_param.keys())
+
     for index_string, config in network_configuration_param.items():
         device_index = int(index_string)
-
-        # convert strings to boolean
-        # config["SourceDestCheck"] = eval(config["SourceDestCheck"].capitalize())
-        # config["IsTarget"] = eval(config["IsTarget"].capitalize())
-
         network_configs[device_index] = config
 
     # need to introspect some info about the instance
@@ -159,12 +169,12 @@ def lambda_handler(event, context):
     role_value = network_configs[0][ROLE_KEY]
     create_tags(
         ec2_client=ec2_client,
-        resource_id=primary_eni,
+        resource_id=primary_eni["NetworkInterfaceId"],
         tags={"Name": f"eth0 - {role_value} {az} {instance_id}", ROLE_KEY: role_value},
     )
     # at this point, there should still only be one interface, the primary one
     # that was created in the launch template
-    network_configs[0]["NetworkInterface"] = inst_details["NetworkInterfaces"][0]
+    network_interfaces[0] = primary_eni
 
     # grab all the subnets for this AZ
     response = ec2_client.describe_subnets(
@@ -178,12 +188,14 @@ def lambda_handler(event, context):
     vpc_subnets = response["Subnets"]
 
     # now add all the additional ENIs
-    for device_index, config in enumerate(network_configs[1:]):
 
-        # more to fix below
+    # iterate over the list of additional interface. skip the primary interface (index 0)
+    for device_index in range(1, len(network_configs)):
 
-        # extract the mgmt subnet for this AZ
-        role_value = DATA_TAG
+        config = network_configs[device_index]
+        role_value = config[ROLE_KEY]
+
+        # extract the tagged subnet for this AZ
         subnets = select_resources_with_tag(
             vpc_subnets, tag_key=ROLE_KEY, tag_value=role_value
         )
@@ -224,7 +236,6 @@ def lambda_handler(event, context):
         # attach the ENI
         # tag the ENI
 
-        index = int(device_index)
         description = config[ROLE_KEY]
         eni = create_attach_eni(
             ec2_client=ec2_client,
@@ -232,17 +243,16 @@ def lambda_handler(event, context):
             instance_id=instance_id,
             subnet_id=subnet_id,
             security_groups=security_groups,
-            device_index=index,
+            device_index=device_index,
             description=description,
             tags={
-                "Name": f"eth{index} - {description} {az} {instance_id}",
+                "Name": f"eth{device_index} - {description} {az} {instance_id}",
                 ROLE_KEY: role_value,
             },
         )
-        network_configs[index]["NetworkInterfaceId"] = eni
+        network_interfaces[device_index] = eni
 
     # register the data interface with the GWLB
-
     elb_client = boto3.client("elbv2")
     geneve_port = 6081
 
@@ -252,15 +262,7 @@ def lambda_handler(event, context):
     )
 
     tg_arn = os.environ["TARGET_GROUP_ARN"]
-    # eni = next(
-    #     (
-    #         intf
-    #         for intf in inst_details["NetworkInterfaces"]
-    #         if intf["Attachment"]["DeviceIndex"] == target_index
-    #     ),
-    #     None,
-    # )
-    private_ip = network_configs[target_index]["PrivateIpAddress"]
+    private_ip = network_interfaces[target_index]["PrivateIpAddress"]
 
     try:
         response = elb_client.register_targets(
@@ -268,11 +270,11 @@ def lambda_handler(event, context):
         )
     except ClientError as e:
         print(e)
-        print(f"Error registering IP : {private_ip} to {tg_arn}")
+        print(f"Error registering IP : {private_ip} to {tg_arn}. abandoning instance.")
 
-        # ABANDON event?
+        response = abandon_instance(event_detail=event_detail, autoscaling=autoscaling)
 
-        return None
+        return response
 
     # record the target IP in a tag on the instance. we'll need the info
     # when the instance terminates.

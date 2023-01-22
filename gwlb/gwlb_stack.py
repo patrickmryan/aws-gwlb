@@ -219,7 +219,7 @@ systemctl start geneveproxy
             ],
             # key_name=key_name,    # don't need this. SSM console is enabled.
             role=instance_role,
-            security_group=template_sg,
+            security_group=management_sg,
             user_data=user_data,
         )
 
