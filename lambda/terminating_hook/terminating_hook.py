@@ -54,6 +54,7 @@ def lambda_handler(event, context):
         response = elb_client.deregister_targets(
             TargetGroupArn=tg_arn, Targets=[{"Id": private_ip, "Port": geneve_port}]
         )
+        logger.info("success")
     except ClientError as e:
         logger.error(e)
         logger.error(f"Error deregistering IP : {private_ip} to {tg_arn}")

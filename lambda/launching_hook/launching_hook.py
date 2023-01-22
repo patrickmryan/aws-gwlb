@@ -265,9 +265,13 @@ def lambda_handler(event, context):
     private_ip = network_interfaces[target_index]["PrivateIpAddress"]
 
     try:
+        print(
+            f"registering eth{target_index}, {private_ip}:{geneve_port} with target group {tg_arn}"
+        )
         response = elb_client.register_targets(
             TargetGroupArn=tg_arn, Targets=[{"Id": private_ip, "Port": geneve_port}]
         )
+        print("success")
     except ClientError as e:
         print(e)
         print(f"Error registering IP : {private_ip} to {tg_arn}. abandoning instance.")
