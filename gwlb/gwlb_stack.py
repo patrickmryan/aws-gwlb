@@ -330,7 +330,7 @@ systemctl start geneveproxy
             healthy_threshold_count=3,
             port=geneve_port,
             protocol="GENEVE",
-            target_type="ip",  # "instance",
+            target_type="ip",
             unhealthy_threshold_count=3,
             vpc_id=vpc.vpc_id,
         )
@@ -384,8 +384,6 @@ systemctl start geneveproxy
                     ],
                 )
             ],
-            # DISABLING because we're using ENIs, not instances.
-            # target_group_arns=[target_group.ref],
         )
 
         listener = elbv2.CfnListener(
@@ -404,6 +402,7 @@ systemctl start geneveproxy
         #  edge: subnet CIDR to VPCE per AZ
 
         edge_route_table = ec2.CfnRouteTable(self, "EdgeRouteTable", vpc_id=vpc.vpc_id)
+        Tags.of(edge_route_table).add("Name", "EdgeRouteTable")
 
         for az, vpce in vpc_endpoints.items():
 
@@ -500,7 +499,8 @@ systemctl start geneveproxy
                                 "elasticloadbalancing:RegisterTargets",
                                 "elasticloadbalancing:DeregisterTargets",
                             ],
-                            resources=["*"],
+                            # resources=["*"],
+                            resources=[target_group.ref],
                         ),
                         iam.PolicyStatement(
                             effect=iam.Effect.ALLOW,
@@ -613,19 +613,31 @@ systemctl start geneveproxy
             },
         )
 
-        subnets = mgmt_subnets.subnets
-        for n in range(len(subnets)):
-            ec2.FlowLog(
-                self,
-                f"DataSubnetFlowLog{n}",
-                resource_type=ec2.FlowLogResourceType.from_subnet(subnets[n]),
-                destination=ec2.FlowLogDestination.to_cloud_watch_logs(
-                    log_group, flow_log_role
-                ),
-                traffic_type=ec2.FlowLogTrafficType.ALL,
-                max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
-                # log_format
-            )
+        ec2.FlowLog(
+            self,
+            "VpcFlowLog",
+            resource_type=ec2.FlowLogResourceType.from_vpc(vpc),
+            destination=ec2.FlowLogDestination.to_cloud_watch_logs(
+                log_group, flow_log_role
+            ),
+            traffic_type=ec2.FlowLogTrafficType.ALL,
+            max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
+        )
+
+        # self.flow_log_for_subnets(
+        #     contruct_name="MgmtSubnetsFlowLog",
+        #     subnets=mgmt_subnets.subnets,
+        #     log_group=log_group,
+        #     flow_log_role=flow_log_role,
+        # )
+
+        # data_subnets = vpc.select_subnets(subnet_group_name="data")
+        # self.flow_log_for_subnets(
+        #     contruct_name="DataSubnetsFlowLog",
+        #     subnets=data_subnets.subnets,
+        #     log_group=log_group,
+        #     flow_log_role=flow_log_role,
+        # )
 
         # install logs agent
         # metrics, dashboard
@@ -780,3 +792,21 @@ systemctl start geneveproxy
         )
 
         return test_instance
+
+    def flow_log_for_subnets(
+        self, contruct_name="", subnets=[], log_group=None, flow_log_role=None
+    ):
+
+        # https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html#flow-log-records
+        for n, subnet in enumerate(subnets):
+            ec2.FlowLog(
+                self,
+                f"{contruct_name}{n}",
+                resource_type=ec2.FlowLogResourceType.from_subnet(subnet),
+                destination=ec2.FlowLogDestination.to_cloud_watch_logs(
+                    log_group, flow_log_role
+                ),
+                traffic_type=ec2.FlowLogTrafficType.ALL,
+                max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
+                # log_format
+            )

@@ -151,9 +151,7 @@ def lambda_handler(event, context):
         print(message)
         raise exc
 
-    new_name = (
-        "firewall_" + (inst_details["PrivateIpAddress"]).replace(".", "_") + f"_{az}"
-    )
+    new_name = f"firewall_{az}_" + (inst_details["PrivateIpAddress"]).replace(".", "_")
 
     create_tags(ec2_client=ec2_client, resource_id=instance_id, tags={"Name": new_name})
 
