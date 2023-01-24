@@ -52,7 +52,6 @@ class GwlbStack(Stack):
                     resource="policy",
                     resource_name=permissions_boundary_policy_name,
                 )
-                print(permissions_boundary_policy_arn)
 
         if permissions_boundary_policy_arn:
             policy = iam.ManagedPolicy.from_managed_policy_arn(
@@ -68,9 +67,7 @@ class GwlbStack(Stack):
         subnet_cidr_mask = 27
 
         subnet_names = ["egress", "data", "management", "trusted"]
-        data_subnet_name = (
-            "data"  # subnet used for data interface ENIs and VPC endpoints
-        )
+        data_subnet_name = "data"
 
         config = ec2.SubnetConfiguration(
             name="egress",
