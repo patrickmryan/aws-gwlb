@@ -146,6 +146,31 @@ class GwlbStack(Stack):
             generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
         )
         assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
+        tun = """
+yum -y groupinstall "Development Tools"
+yum -y install cmake3
+yum -y install tc || true
+yum -y install iproute-tc || true
+cd /root
+git clone https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler.git
+cd aws-gateway-load-balancer-tunnel-handler
+cmake3 .
+make
+
+echo "[Unit]" > /usr/lib/systemd/system/gwlbtun.service
+echo "Description=AWS GWLB Tunnel Handler" >> /usr/lib/systemd/system/gwlbtun.service
+echo "" >> /usr/lib/systemd/system/gwlbtun.service
+echo "[Service]" >> /usr/lib/systemd/system/gwlbtun.service
+echo "ExecStart=/root/aws-gateway-load-balancer-tunnel-handler/gwlbtun -c /root/aws-gateway-load-balancer-tunnel-handler/example-scripts/create-passthrough.sh -p 80" >> /usr/lib/systemd/system/gwlbtun.service
+echo "Restart=always" >> /usr/lib/systemd/system/gwlbtun.service
+echo "RestartSec=5s" >> /usr/lib/systemd/system/gwlbtun.service
+
+systemctl daemon-reload
+systemctl enable --now --no-block gwlbtun.service
+systemctl start gwlbtun.service
+echo
+
+"""
 
         user_data = ec2.UserData.for_linux()
         user_data.add_commands(
@@ -623,21 +648,6 @@ systemctl start geneveproxy
             traffic_type=ec2.FlowLogTrafficType.ALL,
             max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
         )
-
-        # self.flow_log_for_subnets(
-        #     contruct_name="MgmtSubnetsFlowLog",
-        #     subnets=mgmt_subnets.subnets,
-        #     log_group=log_group,
-        #     flow_log_role=flow_log_role,
-        # )
-
-        # data_subnets = vpc.select_subnets(subnet_group_name="data")
-        # self.flow_log_for_subnets(
-        #     contruct_name="DataSubnetsFlowLog",
-        #     subnets=data_subnets.subnets,
-        #     log_group=log_group,
-        #     flow_log_role=flow_log_role,
-        # )
 
         # install logs agent
         # metrics, dashboard

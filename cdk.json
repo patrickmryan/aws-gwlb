@@ -20,7 +20,7 @@
     "NetworkInterfaceConfig": {
       "0": {
         "ROLE": "management",
-        "SourceDestCheck": true,
+        "SourceDestCheck": false,
         "IsTarget": false
       },
       "1": {

@@ -4,9 +4,6 @@ import boto3
 from datetime import datetime
 from botocore.exceptions import ClientError
 
-DEVICE_INDEX_MANAGEMENT = 0  # eth0
-DEVICE_INDEX_DATA = 1  # eth1
-
 # put these in SSM param
 ROLE_KEY = "ROLE"
 
@@ -164,11 +161,24 @@ def lambda_handler(event, context):
         None,
     )
     # tag the primary ENI
-    role_value = network_configs[0][ROLE_KEY]
+    primary_config = network_configs[0]
+    primary_eni_id = primary_eni["NetworkInterfaceId"]
+    role_value = primary_config[ROLE_KEY]
     create_tags(
         ec2_client=ec2_client,
-        resource_id=primary_eni["NetworkInterfaceId"],
+        resource_id=primary_eni_id,
         tags={"Name": f"eth0 - {role_value} {az} {instance_id}", ROLE_KEY: role_value},
+    )
+
+    # set the src/dest flag on the primary interface. normally, this is true
+    # for all interfaces except the data interface.
+    response = ec2_client.modify_network_interface_attribute(
+        NetworkInterfaceId=primary_eni_id,
+        SourceDestCheck={"Value": primary_config["SourceDestCheck"]},
+    )
+    response = ec2_client.modify_network_interface_attribute(
+        NetworkInterfaceId=primary_eni_id,
+        Description={"Value": f"eth0 - {role_value}"},
     )
     # at this point, there should still only be one interface, the primary one
     # that was created in the launch template
@@ -234,7 +244,7 @@ def lambda_handler(event, context):
         # attach the ENI
         # tag the ENI
 
-        description = config[ROLE_KEY]
+        description = f"eth{device_index} - " + config[ROLE_KEY]
         eni = create_attach_eni(
             ec2_client=ec2_client,
             source_dest_flag=config["SourceDestCheck"],
