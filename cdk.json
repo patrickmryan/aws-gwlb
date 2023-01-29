@@ -15,18 +15,24 @@
     ]
   },
   "context": {
+    "PermissionsBoundaryPolicyArn": "",
+    "PermissionsBoundaryPolicyName": "",
+    "Tags": {
+      "o_Environment": "Development"
+    },
+
     "MaxAZs": 2,
     "CidrRange": "172.16.0.0/21",
     "NetworkInterfaceConfig": {
       "0": {
-        "ROLE": "management",
-        "SourceDestCheck": false,
-        "IsTarget": false
-      },
-      "1": {
         "ROLE": "data",
         "SourceDestCheck": false,
         "IsTarget": true
+      },
+      "1": {
+        "ROLE": "management",
+        "SourceDestCheck": true,
+        "IsTarget": false
       }
     },
 

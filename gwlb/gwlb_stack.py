@@ -59,7 +59,10 @@ class GwlbStack(Stack):
             )
             iam.PermissionsBoundary.of(self).apply(policy)
 
-        # Tags.of(self).add("APPLIANCE", "TEST")
+        # apply tags to everything in the stack
+        app_tags = self.node.try_get_context("Tags") or {}
+        for key, value in app_tags.items():
+            Tags.of(self).add(key, value)
 
         cidr_range = self.node.try_get_context("CidrRange")
         max_azs = self.node.try_get_context("MaxAZs")
