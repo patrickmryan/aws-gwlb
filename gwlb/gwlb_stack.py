@@ -1,10 +1,8 @@
 # https://www.sentiatechblog.com/geneveproxy-an-aws-gateway-load-balancer-reference-application
 # https://github.com/sentialabs/geneve-proxy
 # https://datatracker.ietf.org/doc/rfc8926/
-# https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#ImageDetails:imageId=ami-020a3162e09801a69
 
-
-import os
+# import os
 from os.path import join
 import json
 from datetime import datetime, timezone
@@ -24,7 +22,8 @@ from aws_cdk import (
     aws_events_targets as events_targets,
     aws_logs as logs,
     aws_sns as sns,
-    aws_s3 as s3,
+    aws_sns_subscriptions as subscriptions,
+    # aws_s3 as s3,
     aws_s3_assets as s3_assets,
     aws_ssm as ssm,
     custom_resources as cr,
@@ -64,8 +63,8 @@ class GwlbStack(Stack):
         for key, value in app_tags.items():
             Tags.of(self).add(key, value)
 
-        cidr_range = self.node.try_get_context("CidrRange")
-        max_azs = self.node.try_get_context("MaxAZs")
+        cidr_range = self.node.try_get_context("CidrRange") or "10.0.0.0/16"
+        max_azs = self.node.try_get_context("MaxAZs") or 2
         subnet_configs = []
         subnet_cidr_mask = 27
 
@@ -124,11 +123,14 @@ class GwlbStack(Stack):
             for subnet in subnets:
                 Tags.of(subnet).add("ROLE", subnet_name)
 
+        # The GWLB endpoints and the firewall instances all reside in the same subnet.
         intra_vpc = ec2.Peer.ipv4(vpc.vpc_cidr_block)
         template_sg = ec2.SecurityGroup(self, "GeneveProxySG", vpc=vpc)
         geneve_port = 6081
         template_sg.connections.allow_from(
-            ec2.Peer.any_ipv4(), ec2.Port.tcp(geneve_port)
+            intra_vpc,
+            # ec2.Peer.any_ipv4(),
+            ec2.Port.tcp(geneve_port),
         )
         # trust all intra-VPC traffic
         template_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
@@ -138,39 +140,36 @@ class GwlbStack(Stack):
         management_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
         Tags.of(management_sg).add("ROLE", "management")
 
-        # IAM policies
-        # security group(s)
-        # launch template
-
         ami = ec2.MachineImage.latest_amazon_linux(
             generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
         )
         assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
-        tun = """
-yum -y groupinstall "Development Tools"
-yum -y install cmake3
-yum -y install tc || true
-yum -y install iproute-tc || true
-cd /root
-git clone https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler.git
-cd aws-gateway-load-balancer-tunnel-handler
-cmake3 .
-make
 
-echo "[Unit]" > /usr/lib/systemd/system/gwlbtun.service
-echo "Description=AWS GWLB Tunnel Handler" >> /usr/lib/systemd/system/gwlbtun.service
-echo "" >> /usr/lib/systemd/system/gwlbtun.service
-echo "[Service]" >> /usr/lib/systemd/system/gwlbtun.service
-echo "ExecStart=/root/aws-gateway-load-balancer-tunnel-handler/gwlbtun -c /root/aws-gateway-load-balancer-tunnel-handler/example-scripts/create-passthrough.sh -p 80" >> /usr/lib/systemd/system/gwlbtun.service
-echo "Restart=always" >> /usr/lib/systemd/system/gwlbtun.service
-echo "RestartSec=5s" >> /usr/lib/systemd/system/gwlbtun.service
+        #         tun = """
+        # yum -y groupinstall "Development Tools"
+        # yum -y install cmake3
+        # yum -y install tc || true
+        # yum -y install iproute-tc || true
+        # cd /root
+        # git clone https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler.git
+        # cd aws-gateway-load-balancer-tunnel-handler
+        # cmake3 .
+        # make
 
-systemctl daemon-reload
-systemctl enable --now --no-block gwlbtun.service
-systemctl start gwlbtun.service
-echo
+        # echo "[Unit]" > /usr/lib/systemd/system/gwlbtun.service
+        # echo "Description=AWS GWLB Tunnel Handler" >> /usr/lib/systemd/system/gwlbtun.service
+        # echo "" >> /usr/lib/systemd/system/gwlbtun.service
+        # echo "[Service]" >> /usr/lib/systemd/system/gwlbtun.service
+        # echo "ExecStart=/root/aws-gateway-load-balancer-tunnel-handler/gwlbtun -c /root/aws-gateway-load-balancer-tunnel-handler/example-scripts/create-passthrough.sh -p 80" >> /usr/lib/systemd/system/gwlbtun.service
+        # echo "Restart=always" >> /usr/lib/systemd/system/gwlbtun.service
+        # echo "RestartSec=5s" >> /usr/lib/systemd/system/gwlbtun.service
 
-"""
+        # systemctl daemon-reload
+        # systemctl enable --now --no-block gwlbtun.service
+        # systemctl start gwlbtun.service
+        # echo
+
+        # """
 
         user_data = ec2.UserData.for_linux()
         user_data.add_commands(
@@ -330,6 +329,7 @@ systemctl start geneveproxy
         )
 
         # create the VPC endpoints
+        service_name = retrieve_vpce_service_name.get_att_string("ServiceName")
         vpc_endpoints = {}
         for az in vpc.availability_zones:
             vpc_endpoints[az] = ec2.CfnVPCEndpoint(
@@ -342,7 +342,7 @@ systemctl start geneveproxy
                     )
                 ).subnet_ids,
                 vpc_endpoint_type="GatewayLoadBalancer",
-                service_name=retrieve_vpce_service_name.get_att_string("ServiceName"),
+                service_name=service_name,
             )
 
         target_group = elbv2.CfnTargetGroup(
@@ -362,6 +362,14 @@ systemctl start geneveproxy
 
         # topic for autoscaling events
         scaling_topic = sns.Topic(self, "AsgScalingEvent")
+
+        notifications_address = self.node.try_get_context("NotificationsEmailAddress")
+        if notifications_address:
+            scaling_topic.add_subscription(
+                subscriptions.EmailSubscription(
+                    email_address=notifications_address,
+                )
+            )
 
         asg_name = "gwlb-asg-" + self.stack_name
         asg_arn = (
@@ -397,6 +405,7 @@ systemctl start geneveproxy
                     ],
                 )
             ],
+            new_instances_protected_from_scale_in=False,
             # update_policy=autoscaling.UpdatePolicy.rolling_update(),
             notification_configurations=[
                 autoscaling.CfnAutoScalingGroup.NotificationConfigurationProperty(
