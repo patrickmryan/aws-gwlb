@@ -69,7 +69,6 @@ class GwlbStack(Stack):
         subnet_cidr_mask = 27
 
         subnet_names = ["egress", "data", "management", "trusted"]
-        data_subnet_name = "data"
 
         config = ec2.SubnetConfiguration(
             name="egress",
@@ -145,54 +144,35 @@ class GwlbStack(Stack):
         )
         assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
 
-        #         tun = """
-        # yum -y groupinstall "Development Tools"
-        # yum -y install cmake3
-        # yum -y install tc || true
-        # yum -y install iproute-tc || true
-        # cd /root
-        # git clone https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler.git
-        # cd aws-gateway-load-balancer-tunnel-handler
-        # cmake3 .
-        # make
-
-        # echo "[Unit]" > /usr/lib/systemd/system/gwlbtun.service
-        # echo "Description=AWS GWLB Tunnel Handler" >> /usr/lib/systemd/system/gwlbtun.service
-        # echo "" >> /usr/lib/systemd/system/gwlbtun.service
-        # echo "[Service]" >> /usr/lib/systemd/system/gwlbtun.service
-        # echo "ExecStart=/root/aws-gateway-load-balancer-tunnel-handler/gwlbtun -c /root/aws-gateway-load-balancer-tunnel-handler/example-scripts/create-passthrough.sh -p 80" >> /usr/lib/systemd/system/gwlbtun.service
-        # echo "Restart=always" >> /usr/lib/systemd/system/gwlbtun.service
-        # echo "RestartSec=5s" >> /usr/lib/systemd/system/gwlbtun.service
-
-        # systemctl daemon-reload
-        # systemctl enable --now --no-block gwlbtun.service
-        # systemctl start gwlbtun.service
-        # echo
-
-        # """
-
         user_data = ec2.UserData.for_linux()
+
         user_data.add_commands(
             """
+yum -y groupinstall "Development Tools"
+yum -y install cmake3
+yum -y install tc || true
+yum -y install iproute-tc || true
+cd /root
+git clone https://github.com/aws-samples/aws-gateway-load-balancer-tunnel-handler.git
+cd aws-gateway-load-balancer-tunnel-handler
+cmake3 .
+make
 
-yum install git -y -q
-python3 -m pip install PyYAML
-cd ~ec2-user
-git clone https://github.com/sentialabs/geneve-proxy.git
-"""
-        )
-        zip_file = user_data.add_s3_download_command(
-            bucket=assets.bucket, bucket_key=assets.s3_object_key
-        )
+cat > /usr/lib/systemd/system/gwlbtun.service <<__EOF__
+[Unit]
+Description=AWS GWLB Tunnel Handler"
 
-        user_data.add_commands(
-            f"""
-unzip {zip_file}
-mv geneveproxy.service /etc/systemd/system
-chmod 700 proxy.sh
-chown -R ec2-user.ec2-user .
-systemctl enable geneveproxy
-systemctl start geneveproxy
+[Service]
+ExecStart=/root/aws-gateway-load-balancer-tunnel-handler/gwlbtun -c /root/aws-gateway-load-balancer-tunnel-handler/example-scripts/create-passthrough.sh -p 80"
+Restart=always
+RestartSec=5s
+__EOF__
+
+systemctl daemon-reload
+systemctl enable --now --no-block gwlbtun.service
+systemctl start gwlbtun.service
+echo
+
 """
         )
 
@@ -285,14 +265,32 @@ systemctl start geneveproxy
             },
         )
 
-        mgmt_subnets = vpc.select_subnets(subnet_group_name="management")
+        # mgmt_subnets = vpc.select_subnets(subnet_group_name="management")
+
+        # the LB uses the subnets that will be used for eth0
+        primary_subnets = vpc.select_subnets(
+            subnet_group_name=network_interface_config["0"]["ROLE"]
+        )
+
+        # get the ROLE name for the subnets that will be used for the GWLBEs
+        data_subnet_key = next(
+            (
+                key
+                for key in network_interface_config.keys()
+                if network_interface_config[key]["IsTarget"]
+            ),
+            None,
+        )
+        data_subnet_name = network_interface_config[data_subnet_key]["ROLE"]
+
+        gwlb_subnets = vpc.select_subnets(subnet_group_name=data_subnet_name)
 
         gwlb = elbv2.CfnLoadBalancer(
             self,
             "GatewayLoadBalancer",
             name=f"GWLB-{self.stack_name}",
             type="gateway",
-            subnets=mgmt_subnets.subnet_ids,
+            subnets=gwlb_subnets.subnet_ids,
             load_balancer_attributes=[
                 elbv2.CfnLoadBalancer.LoadBalancerAttributeProperty(
                     key="load_balancing.cross_zone.enabled", value="true"
@@ -329,6 +327,7 @@ systemctl start geneveproxy
         )
 
         # create the VPC endpoints
+
         service_name = retrieve_vpce_service_name.get_att_string("ServiceName")
         vpc_endpoints = {}
         for az in vpc.availability_zones:
@@ -381,7 +380,7 @@ systemctl start geneveproxy
             self,
             "ASG",
             auto_scaling_group_name=asg_name,
-            vpc_zone_identifier=mgmt_subnets.subnet_ids,
+            vpc_zone_identifier=primary_subnets.subnet_ids,
             launch_template=autoscaling.CfnAutoScalingGroup.LaunchTemplateSpecificationProperty(
                 launch_template_id=launch_template.launch_template_id,
                 version=launch_template.latest_version_number,
