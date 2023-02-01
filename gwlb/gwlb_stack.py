@@ -511,100 +511,7 @@ echo
             resource_name="*",
         )
 
-        managed_policies = [basic_lambda_policy]
-        lifecycle_hook_role = iam.Role(
-            self,
-            "LifecycleHookRole",
-            assumed_by=lambda_principal,
-            managed_policies=managed_policies,
-            inline_policies={
-                "LaunchHookPolicies": iam.PolicyDocument(
-                    assign_sids=True,
-                    statements=[
-                        iam.PolicyStatement(
-                            effect=iam.Effect.ALLOW,
-                            actions=["autoscaling:CompleteLifecycleAction"],
-                            resources=[asg_arn],
-                        ),
-                        iam.PolicyStatement(
-                            effect=iam.Effect.ALLOW,
-                            actions=[
-                                "elasticloadbalancing:RegisterTargets",
-                                "elasticloadbalancing:DeregisterTargets",
-                            ],
-                            # resources=["*"],
-                            resources=[target_group.ref],
-                        ),
-                        iam.PolicyStatement(
-                            effect=iam.Effect.ALLOW,
-                            # actions=["ec2:Describe*", "ec2:*NetworkInterface*"],
-                            actions=["ec2:*"],  # need to narrow this down
-                            resources=["*"],
-                        ),
-                        iam.PolicyStatement(
-                            effect=iam.Effect.ALLOW,
-                            actions=["ec2:CreateTags"],
-                            resources=[acct_instances_arn],
-                        ),
-                    ],
-                )
-            },
-        )
-        network_ssm_param.grant_read(lifecycle_hook_role)
-
-        # Make sure the launching rule and lambda are created before the ASG.
-        # Bad things can happen if the ASG starts spinning up instances before the
-        # lifecycle hook lambdas and rules are deployed.
-
-        # Now set up the lifecycle hooks for launching and terminating events.
-
-        lambda_env = {
-            "TARGET_GROUP_ARN": target_group.ref,
-            "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
-        }
-
-        launching_rule = self.add_lifecycle_hook(
-            construct_id="Launching",
-            asg=asg,
-            asg_name=asg_name,
-            asg_arn=asg_arn,
-            lifecycle_hook_role=lifecycle_hook_role,
-            lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
-            lambda_settings=lambda_settings,
-            lambda_handler="launching_hook.lambda_handler",
-            lambda_env=lambda_env,
-            lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
-            default_result="ABANDON",
-        )
-
-        asg.node.add_dependency(launching_rule)
-        asg_update_resource.node.add_dependency(launching_rule)
-
-        # the launch hook resource should not execute until AFTER the ASG been deployed
-        # launch_hook_resource.node.add_dependency(asg)
-
-        terminating_rule = self.add_lifecycle_hook(
-            construct_id="Terminating",
-            asg=asg,
-            asg_name=asg_name,
-            asg_arn=asg_arn,
-            lifecycle_hook_role=lifecycle_hook_role,
-            lambda_code=_lambda.Code.from_asset(join(lambda_root, "terminating_hook")),
-            lambda_settings=lambda_settings,
-            lambda_handler="terminating_hook.lambda_handler",
-            lambda_env=lambda_env,
-            lifecycle_transition="autoscaling:EC2_INSTANCE_TERMINATING",
-            default_result="CONTINUE",
-        )
-        asg.node.add_dependency(terminating_rule)
-        asg_update_resource.node.add_dependency(terminating_rule)
-
-        # set desired_instances AFTER the ASG, hook, lambda, and rule are all deployed.
-        asg_update_resource.node.add_dependency(asg)
-
-        # VPC flow logs on DATA subnets.
-
-        log_group = logs.LogGroup(
+        flowlogs_log_group = logs.LogGroup(
             self,
             "VPCFlowLogs",
             removal_policy=RemovalPolicy.DESTROY,
@@ -646,16 +553,109 @@ echo
             },
         )
 
-        ec2.FlowLog(
+        # ec2.FlowLog(
+        #     self,
+        #     "VpcFlowLog",
+        #     resource_type=ec2.FlowLogResourceType.from_vpc(vpc),
+        #     destination=ec2.FlowLogDestination.to_cloud_watch_logs(
+        #         flowlogs_log_group, flow_log_role
+        #     ),
+        #     traffic_type=ec2.FlowLogTrafficType.ALL,
+        #     max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
+        # )
+
+        managed_policies = [basic_lambda_policy]
+        lifecycle_hook_role = iam.Role(
             self,
-            "VpcFlowLog",
-            resource_type=ec2.FlowLogResourceType.from_vpc(vpc),
-            destination=ec2.FlowLogDestination.to_cloud_watch_logs(
-                log_group, flow_log_role
-            ),
-            traffic_type=ec2.FlowLogTrafficType.ALL,
-            max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
+            "LifecycleHookRole",
+            assumed_by=lambda_principal,
+            managed_policies=managed_policies,
+            inline_policies={
+                "LaunchHookPolicies": iam.PolicyDocument(
+                    assign_sids=True,
+                    statements=[
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=["autoscaling:CompleteLifecycleAction"],
+                            resources=[asg_arn],
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=[
+                                "elasticloadbalancing:RegisterTargets",
+                                "elasticloadbalancing:DeregisterTargets",
+                            ],
+                            # resources=["*"],
+                            resources=[target_group.ref],
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            # actions=["ec2:Describe*", "ec2:*NetworkInterface*", "ec2:CreateFlowLog"],
+                            actions=["ec2:*"],  # need to narrow this down
+                            resources=["*"],
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=["ec2:CreateTags"],
+                            resources=[acct_instances_arn],
+                        ),
+                    ],
+                )
+            },
         )
+        network_ssm_param.grant_read(lifecycle_hook_role)
+
+        # Make sure the launching rule and lambda are created before the ASG.
+        # Bad things can happen if the ASG starts spinning up instances before the
+        # lifecycle hook lambdas and rules are deployed.
+
+        # Now set up the lifecycle hooks for launching and terminating events.
+
+        lambda_env = {
+            "TARGET_GROUP_ARN": target_group.ref,
+            "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
+            "LOG_GROUP_NAME": flowlogs_log_group.log_group_name,
+            "FLOW_LOG_ARN": flow_log_role.role_arn,
+        }
+
+        launching_rule = self.add_lifecycle_hook(
+            construct_id="Launching",
+            asg=asg,
+            asg_name=asg_name,
+            asg_arn=asg_arn,
+            lifecycle_hook_role=lifecycle_hook_role,
+            lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
+            lambda_settings=lambda_settings,
+            lambda_handler="launching_hook.lambda_handler",
+            lambda_env=lambda_env,
+            lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
+            default_result="ABANDON",
+        )
+
+        asg.node.add_dependency(launching_rule)
+        asg_update_resource.node.add_dependency(launching_rule)
+
+        # the launch hook resource should not execute until AFTER the ASG been deployed
+        # launch_hook_resource.node.add_dependency(asg)
+
+        terminating_rule = self.add_lifecycle_hook(
+            construct_id="Terminating",
+            asg=asg,
+            asg_name=asg_name,
+            asg_arn=asg_arn,
+            lifecycle_hook_role=lifecycle_hook_role,
+            lambda_code=_lambda.Code.from_asset(join(lambda_root, "terminating_hook")),
+            lambda_settings=lambda_settings,
+            lambda_handler="terminating_hook.lambda_handler",
+            lambda_env=lambda_env,
+            lifecycle_transition="autoscaling:EC2_INSTANCE_TERMINATING",
+            default_result="CONTINUE",
+        )
+        asg.node.add_dependency(terminating_rule)
+        asg_update_resource.node.add_dependency(terminating_rule)
+
+        # set desired_instances AFTER the ASG, hook, lambda, and rule are all deployed.
+        asg_update_resource.node.add_dependency(asg)
 
         # install logs agent
         # metrics, dashboard
