@@ -33,7 +33,7 @@ def create_attach_eni(
     instance_id=None,
     device_index=-1,
     subnet_id=None,
-    security_groups=[],
+    security_groups_ids=[],
     description="",
     source_dest_flag=True,
     tags={},
@@ -49,7 +49,7 @@ def create_attach_eni(
     try:
         response = ec2_client.create_network_interface(
             SubnetId=subnet_id,
-            Groups=security_groups,
+            Groups=security_groups_ids,
             Description=description,
             TagSpecifications=[tag_param],
         )
@@ -74,7 +74,7 @@ def create_attach_eni(
     except ClientError as client_error:
         print(f"failed to create or attach ENI - {client_error}")
         print(
-            f"instance {instance_id},  eth{device_index}, {subnet_id}, {security_groups}"
+            f"instance {instance_id},  eth{device_index}, {subnet_id}, {security_groups_ids}"
         )
         raise client_error
 
@@ -164,10 +164,11 @@ def lambda_handler(event, context):
     primary_config = network_configs[0]
     primary_eni_id = primary_eni["NetworkInterfaceId"]
     role_value = primary_config[ROLE_KEY]
+    description = f"eth0 - {role_value} {az} {instance_id}"
     create_tags(
         ec2_client=ec2_client,
         resource_id=primary_eni_id,
-        tags={"Name": f"eth0 - {role_value} {az} {instance_id}", ROLE_KEY: role_value},
+        tags={"Name": description, ROLE_KEY: role_value},
     )
 
     # set the src/dest flag on the primary interface. normally, this is true
@@ -176,10 +177,12 @@ def lambda_handler(event, context):
         NetworkInterfaceId=primary_eni_id,
         SourceDestCheck={"Value": primary_config["SourceDestCheck"]},
     )
+
+    # make the description more useful
     response = ec2_client.modify_network_interface_attribute(
-        NetworkInterfaceId=primary_eni_id,
-        Description={"Value": f"eth0 - {role_value}"},
+        NetworkInterfaceId=primary_eni_id, Description={"Value": description}
     )
+
     # at this point, there should still only be one interface, the primary one
     # that was created in the launch template
     network_interfaces[0] = primary_eni
@@ -233,28 +236,28 @@ def lambda_handler(event, context):
             security_groups, tag_key=ROLE_KEY, tag_value=role_value
         )
         if not groups:
-            message = (
-                f"could not find security groups with tag {role_value} in VPC {vpc_id}"
-            )
-            raise Exception(message)
+            message = f"for device index {device_index}, could not find any security groups with tag {role_value} in VPC {vpc_id}"
+            print(message)
+            continue  # should maybe abandon instance at this points
 
-        security_groups = [group["GroupId"] for group in groups]
+        security_groups_ids = [group["GroupId"] for group in groups]
 
         # create another ENI
         # attach the ENI
         # tag the ENI
 
-        description = f"eth{device_index} - " + config[ROLE_KEY]
+        role_value = config[ROLE_KEY]
+        description = f"eth{device_index} - {role_value} {az} {instance_id}"
         eni = create_attach_eni(
             ec2_client=ec2_client,
             source_dest_flag=config["SourceDestCheck"],
             instance_id=instance_id,
             subnet_id=subnet_id,
-            security_groups=security_groups,
+            security_groups_ids=security_groups_ids,
             device_index=device_index,
             description=description,
             tags={
-                "Name": f"eth{device_index} - {description} {az} {instance_id}",
+                "Name": description,
                 ROLE_KEY: role_value,
             },
         )
@@ -311,34 +314,5 @@ def lambda_handler(event, context):
     except ClientError as e:
         message = "Error completing lifecycle action: {}".format(e)
         print(message)
-
-    # create a flow log for the data ENI if a log group name is provided.
-
-    # log_group_name = os.environ.get("LOG_GROUP_NAME")
-    # flow_log_arn = os.environ.get("FLOW_LOG_ARN")
-
-    # if log_group_name and flow_log_arn:
-
-    #     try:
-    #         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.create_flow_logs
-    #         ec2_client.create_flow_logs(
-    #             DeliverLogsPermissionArn=flow_log_arn,
-    #             LogGroupName=log_group_name,
-    #             ResourceIds=[target_eni["NetworkInterfaceId"]],
-    #             ResourceType="NetworkInterface",
-    #             TrafficType="ALL",
-    #             LogDestinationType="cloud-watch-logs",
-    #             MaxAggregationInterval=60,
-    #             TagSpecifications=[
-    #                 {
-    #                     "ResourceType": "vpc-flow-log",
-    #                     "Tags": [{"Key": "Name", "Value": f"data - {private_ip}"}],
-    #                 }
-    #             ],
-    #         )
-
-    #     except ClientError as exc:
-    #         message = f"Error creating flow log for: {private_ip}: {exc}"
-    #         print(message)
 
     print(response)

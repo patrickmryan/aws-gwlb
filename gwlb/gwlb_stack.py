@@ -550,24 +550,11 @@ echo
                     assign_sids=True,
                     statements=[statement],
                 ),
-                # "logcreate": iam.PolicyDocument(
-                #     assign_sids=True,
-                #     statements=[
-                #         iam.PolicyStatement(
-                #             actions=[
-                #                 "ec2:CreateFlowLogs",
-                #             ],
-                #             effect=iam.Effect.ALLOW,
-                #             resources=["*"],
-                #         )
-                #     ],
-                # ),
             },
         )
 
-        # gwlb_subnets.subnet_ids,
+        # Create flow logs on the data subnets.
         for n, subnet in enumerate(gwlb_subnets.subnets):
-
             ec2.FlowLog(
                 self,
                 f"VpcFlowLog{n}",
@@ -578,17 +565,6 @@ echo
                 traffic_type=ec2.FlowLogTrafficType.ALL,
                 max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
             )
-
-        # ec2.FlowLog(
-        #     self,
-        #     "VpcFlowLog",
-        #     resource_type=ec2.FlowLogResourceType.from_vpc(vpc),
-        #     destination=ec2.FlowLogDestination.to_cloud_watch_logs(
-        #         flowlogs_log_group, flow_log_role
-        #     ),
-        #     traffic_type=ec2.FlowLogTrafficType.ALL,
-        #     max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
-        # )
 
         managed_policies = [basic_lambda_policy]
         lifecycle_hook_role = iam.Role(
@@ -616,8 +592,13 @@ echo
                         ),
                         iam.PolicyStatement(
                             effect=iam.Effect.ALLOW,
-                            # actions=["ec2:Describe*", "ec2:*NetworkInterface*", "ec2:CreateFlowLog"],
-                            actions=["ec2:*"],  # need to narrow this down
+                            actions=[
+                                "ec2:Describe*",
+                                "ec2:ModifyNetworkInterface*",
+                                "ec2:AttachNetworkInterface*",
+                                "ec2:CreateTags",
+                            ],
+                            # actions=["ec2:*"],  # need to narrow this down
                             resources=["*"],
                         ),
                         iam.PolicyStatement(
@@ -640,8 +621,6 @@ echo
         lambda_env = {
             "TARGET_GROUP_ARN": target_group.ref,
             "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
-            "LOG_GROUP_NAME": flowlogs_log_group.log_group_name,
-            "FLOW_LOG_ARN": flow_log_role.role_arn,
         }
 
         launching_rule = self.add_lifecycle_hook(
