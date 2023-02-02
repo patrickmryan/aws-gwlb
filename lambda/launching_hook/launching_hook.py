@@ -314,26 +314,31 @@ def lambda_handler(event, context):
 
     # create a flow log for the data ENI if a log group name is provided.
 
-    log_group_name = os.environ.get("LOG_GROUP_NAME")
-    flow_log_arn = os.environ.get("FLOW_LOG_ARN")
+    # log_group_name = os.environ.get("LOG_GROUP_NAME")
+    # flow_log_arn = os.environ.get("FLOW_LOG_ARN")
 
-    if log_group_name and flow_log_arn:
+    # if log_group_name and flow_log_arn:
 
-        # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.create_flow_logs
-        ec2_client.create_flow_logs(
-            DeliverLogsPermissionArn=flow_log_arn,
-            LogGroupName=log_group_name,
-            ResourceIds=[target_eni["NetworkInterfaceId"]],
-            ResourceType="NetworkInterface",
-            TrafficType="ALL",
-            LogDestinationType="cloud-watch-logs",
-            MaxAggregationInterval=60,
-            TagSpecifications=[
-                {
-                    "ResourceType": "vpc-flow-log",
-                    "Tags": [{"Key": "Name", "Value": f"data - {private_ip}"}],
-                }
-            ],
-        )
+    #     try:
+    #         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.create_flow_logs
+    #         ec2_client.create_flow_logs(
+    #             DeliverLogsPermissionArn=flow_log_arn,
+    #             LogGroupName=log_group_name,
+    #             ResourceIds=[target_eni["NetworkInterfaceId"]],
+    #             ResourceType="NetworkInterface",
+    #             TrafficType="ALL",
+    #             LogDestinationType="cloud-watch-logs",
+    #             MaxAggregationInterval=60,
+    #             TagSpecifications=[
+    #                 {
+    #                     "ResourceType": "vpc-flow-log",
+    #                     "Tags": [{"Key": "Name", "Value": f"data - {private_ip}"}],
+    #                 }
+    #             ],
+    #         )
+
+    #     except ClientError as exc:
+    #         message = f"Error creating flow log for: {private_ip}: {exc}"
+    #         print(message)
 
     print(response)

@@ -549,9 +549,35 @@ echo
                 "logs": iam.PolicyDocument(
                     assign_sids=True,
                     statements=[statement],
-                )
+                ),
+                # "logcreate": iam.PolicyDocument(
+                #     assign_sids=True,
+                #     statements=[
+                #         iam.PolicyStatement(
+                #             actions=[
+                #                 "ec2:CreateFlowLogs",
+                #             ],
+                #             effect=iam.Effect.ALLOW,
+                #             resources=["*"],
+                #         )
+                #     ],
+                # ),
             },
         )
+
+        # gwlb_subnets.subnet_ids,
+        for n, subnet in enumerate(gwlb_subnets.subnets):
+
+            ec2.FlowLog(
+                self,
+                f"VpcFlowLog{n}",
+                resource_type=ec2.FlowLogResourceType.from_subnet(subnet),
+                destination=ec2.FlowLogDestination.to_cloud_watch_logs(
+                    flowlogs_log_group, flow_log_role
+                ),
+                traffic_type=ec2.FlowLogTrafficType.ALL,
+                max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
+            )
 
         # ec2.FlowLog(
         #     self,
