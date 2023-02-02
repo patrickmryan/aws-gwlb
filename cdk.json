@@ -24,12 +24,12 @@
     "MaxAZs": 2,
     "CidrRange": "172.16.0.0/21",
     "NetworkInterfaceConfig": {
-      "0": {
+      "1": {
         "ROLE": "data",
         "SourceDestCheck": false,
         "IsTarget": true
       },
-      "1": {
+      "0": {
         "ROLE": "management",
         "SourceDestCheck": true,
         "IsTarget": false
