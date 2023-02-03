@@ -7,11 +7,13 @@ from os.path import join
 import json
 from datetime import datetime, timezone
 
+# import jsii
 from aws_cdk import (
     Duration,
     Stack,
     Tags,
     RemovalPolicy,
+    # Aspects, IAspect,
     CustomResource,
     aws_ec2 as ec2,
     aws_iam as iam,
@@ -24,11 +26,19 @@ from aws_cdk import (
     aws_sns as sns,
     aws_sns_subscriptions as subscriptions,
     # aws_s3 as s3,
-    aws_s3_assets as s3_assets,
+    # aws_s3_assets as s3_assets,
     aws_ssm as ssm,
     custom_resources as cr,
 )
 from constructs import Construct
+
+
+# @jsii.implements(IAspect)
+# class IamNameChecker:
+
+#   def visit(self, node):
+#     if isinstance(node, iam.Role):
+#         print(f"found role {node.role_name}")
 
 
 class GwlbStack(Stack):
@@ -57,6 +67,9 @@ class GwlbStack(Stack):
                 self, "PermissionsBoundary", permissions_boundary_policy_arn
             )
             iam.PermissionsBoundary.of(self).apply(policy)
+
+        # Aspects.of(self).add(IamNameChecker())
+        iam_prefix = "Network"
 
         # apply tags to everything in the stack
         app_tags = self.node.try_get_context("Tags") or {}
@@ -128,7 +141,6 @@ class GwlbStack(Stack):
         geneve_port = 6081
         template_sg.connections.allow_from(
             intra_vpc,
-            # ec2.Peer.any_ipv4(),
             ec2.Port.tcp(geneve_port),
         )
         # trust all intra-VPC traffic
@@ -142,7 +154,7 @@ class GwlbStack(Stack):
         ami = ec2.MachineImage.latest_amazon_linux(
             generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
         )
-        assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
+        # assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
 
         user_data = ec2.UserData.for_linux()
 
@@ -177,9 +189,11 @@ echo
         )
 
         # role for firewall instance
+        resource_name = "FirewallInstanceRole"
         instance_role = iam.Role(
             self,
-            "FirewallInstanceRole",
+            resource_name,
+            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name(
@@ -188,24 +202,24 @@ echo
                 iam.ManagedPolicy.from_aws_managed_policy_name(
                     "AmazonSSMManagedInstanceCore"
                 ),
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "CloudWatchAgentServerPolicy"
-                ),
+                # iam.ManagedPolicy.from_aws_managed_policy_name(
+                #     "CloudWatchAgentServerPolicy"
+                # ),
             ],
-            inline_policies={
-                "logretention": iam.PolicyDocument(
-                    assign_sids=True,
-                    statements=[
-                        iam.PolicyStatement(
-                            actions=[
-                                "logs:PutRetentionPolicy",
-                            ],
-                            effect=iam.Effect.ALLOW,
-                            resources=["*"],
-                        ),
-                    ],
-                )
-            },
+            # inline_policies={
+            #     "logretention": iam.PolicyDocument(
+            #         assign_sids=True,
+            #         statements=[
+            #             iam.PolicyStatement(
+            #                 actions=[
+            #                     "logs:PutRetentionPolicy",
+            #                 ],
+            #                 effect=iam.Effect.ALLOW,
+            #                 resources=["*"],
+            #             ),
+            #         ],
+            #     )
+            # },
         )
 
         launch_template = ec2.LaunchTemplate(
@@ -235,16 +249,45 @@ echo
             "service-role/AWSLambdaVPCAccessExecutionRole"
         )
 
+        resource_name = "LogRetentionRole"
+        log_retention_role = iam.Role(
+            self,
+            resource_name,
+            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+            assumed_by=lambda_principal,
+            managed_policies=[
+                basic_lambda_policy,
+            ],
+            inline_policies={
+                "SetLogRetention": iam.PolicyDocument(
+                    assign_sids=True,
+                    statements=[
+                        iam.PolicyStatement(
+                            actions=[
+                                "logs:DeleteRetentionPolicy",
+                                "logs:PutRetentionPolicy",
+                            ],
+                            effect=iam.Effect.ALLOW,
+                            resources=["*"],
+                        ),
+                    ],
+                )
+            },
+        )
+
         python_runtime = _lambda.Runtime.PYTHON_3_9
         lambda_settings = {
             "log_retention": logs.RetentionDays.ONE_WEEK,
+            "log_retention_role": log_retention_role,
             "runtime": python_runtime,
             "timeout": Duration.seconds(60),
         }
 
+        resource_name = "VpceServiceLambdaExecutionRole"
         service_role = iam.Role(
             self,
-            "VpceServiceLambdaExecutionRole",
+            resource_name,
+            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=lambda_principal,
             managed_policies=[
                 basic_lambda_policy,
@@ -264,8 +307,6 @@ echo
                 )
             },
         )
-
-        # mgmt_subnets = vpc.select_subnets(subnet_group_name="management")
 
         # the LB uses the subnets that will be used for eth0
         primary_subnets = vpc.select_subnets(
@@ -307,6 +348,7 @@ echo
             role=service_role,
             # https://docs.aws.amazon.com/lambda/latest/operatorguide/networking-vpc.html
             log_retention=logs.RetentionDays.ONE_DAY,
+            log_retention_role=log_retention_role,
             runtime=python_runtime,
             timeout=Duration.seconds(240),
         )
@@ -541,9 +583,12 @@ echo
             },
         )
 
+        resource_name = "FlowLogRole"
+
         flow_log_role = iam.Role(
             self,
-            "FlowLogRole",
+            resource_name,
+            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=iam.ServicePrincipal("vpc-flow-logs.amazonaws.com"),
             inline_policies={
                 "logs": iam.PolicyDocument(
@@ -566,10 +611,12 @@ echo
                 max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
             )
 
+        resource_name = "LifecycleHookRole"
         managed_policies = [basic_lambda_policy]
         lifecycle_hook_role = iam.Role(
             self,
-            "LifecycleHookRole",
+            resource_name,
+            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=lambda_principal,
             managed_policies=managed_policies,
             inline_policies={
@@ -668,8 +715,26 @@ echo
         launch_test_instance_param = self.node.try_get_context("LaunchTestInstance")
 
         if launch_test_instance_param:
+
+            resource_name = "TestInstanceRole"
+            instance_role = iam.Role(
+                self,
+                resource_name,
+                role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+                assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
+                managed_policies=[
+                    iam.ManagedPolicy.from_aws_managed_policy_name(
+                        "AmazonS3ReadOnlyAccess"
+                    ),
+                    iam.ManagedPolicy.from_aws_managed_policy_name(
+                        "AmazonSSMManagedInstanceCore"
+                    ),
+                ],
+            )
+
             self.launch_test_instance(
                 vpc=vpc,
+                role=instance_role,
                 vpc_subnets=ec2.SubnetSelection(subnet_group_name="trusted"),
             )
 
@@ -780,21 +845,13 @@ echo
 
         return lifecycle_rule
 
-    def launch_test_instance(self, vpc=None, vpc_subnets=None, key_name=None):
+    def launch_test_instance(
+        self, vpc=None, vpc_subnets=None, role=None, key_name=None
+    ):
 
-        instance_role = iam.Role(
-            self,
-            "TestInstanceRole",
-            assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
-            managed_policies=[
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "AmazonS3ReadOnlyAccess"
-                ),
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "AmazonSSMManagedInstanceCore"
-                ),
-            ],
-        )
+        optional_params = {}
+        if key_name:
+            optional_params["key_name"] = key_name
 
         test_instance = ec2.Instance(
             self,
@@ -811,7 +868,8 @@ echo
                     volume=ec2.BlockDeviceVolume.ebs(10, delete_on_termination=True),
                 )
             ],
-            role=instance_role,
+            role=role,
+            **optional_params,
         )
 
         return test_instance
