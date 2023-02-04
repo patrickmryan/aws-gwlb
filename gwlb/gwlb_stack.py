@@ -329,7 +329,7 @@ echo
         gwlb = elbv2.CfnLoadBalancer(
             self,
             "GatewayLoadBalancer",
-            name=f"GWLB-{self.stack_name}",
+            name=f"NSB-GWLB-{self.stack_name}",
             type="gateway",
             subnets=gwlb_subnets.subnet_ids,
             load_balancer_attributes=[
@@ -360,12 +360,16 @@ echo
             gateway_load_balancer_arns=[gwlb.ref],
         )
 
+        resource_name = "RetrieveVpceServiceName"
         retrieve_vpce_service_name = CustomResource(
             self,
-            "RetrieveVpceServiceName",
+            resource_name,
             resource_type="Custom::RetrieveAttributes",
             service_token=vpce_service_lambda.function_arn,
-            properties={"VpceServiceId": gw_endpoint_service.ref},
+            properties={
+                "FunctionName": iam_prefix + resource_name,
+                "VpceServiceId": gw_endpoint_service.ref,
+            },
         )
 
         # create the VPC endpoints
@@ -412,7 +416,7 @@ echo
                 )
             )
 
-        asg_name = "gwlb-asg-" + self.stack_name
+        asg_name = "NSB-gwlb-asg-" + self.stack_name
         asg_arn = (
             f"arn:{self.partition}:autoscaling:{self.region}:"
             + f"{self.account}:autoScalingGroup:*:autoScalingGroupName/{asg_name}"
@@ -525,9 +529,11 @@ echo
             physical_resource_id=cr.PhysicalResourceId.of("PutDesiredInstancesSetting"),
         )
 
+        resource_name = "DesiredInstancesResource"
         asg_update_resource = cr.AwsCustomResource(
             self,
-            "DesiredInstancesResource",
+            resource_name,
+            # function_name=iam_prefix+resource_name,
             on_create=set_desired_instances_sdk_call,
             on_update=set_desired_instances_sdk_call,  # update just does the same thing as create.
             policy=cr.AwsCustomResourcePolicy.from_statements(
@@ -802,9 +808,12 @@ echo
             ),
         )
 
+        iam_prefix = "Network"
+        resource_name = construct_id + "HookCustomResource"
         hook_resource = cr.AwsCustomResource(
             self,
-            construct_id + "HookCustomResource",
+            resource_name,
+            # function_name=iam_prefix+resource_name,
             on_create=put_hook_sdk_call,
             on_update=put_hook_sdk_call,  # update just does the same thing as create.
             on_delete=delete_hook_sdk_call,
