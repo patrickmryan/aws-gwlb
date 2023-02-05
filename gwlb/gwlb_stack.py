@@ -34,11 +34,15 @@ from constructs import Construct
 
 
 # @jsii.implements(IAspect)
-# class IamNameChecker:
+# class IamNameChecker():
 
-#   def visit(self, node):
-#     if isinstance(node, iam.Role):
-#         print(f"found role {node.role_name}")
+#     def __init__(self,prefix=None):
+#         self.prefix = prefix
+
+#     def visit(self, node):
+#         if isinstance(node, iam.Role):
+#             print(f"found role {node.role_name}")
+#             node.role_name = self.prefix + node.role_name
 
 
 class GwlbStack(Stack):
@@ -68,8 +72,8 @@ class GwlbStack(Stack):
             )
             iam.PermissionsBoundary.of(self).apply(policy)
 
-        # Aspects.of(self).add(IamNameChecker())
-        iam_prefix = "Network"
+        iam_prefix = "TESTNetwork"
+        # Aspects.of(self).add(IamNameChecker(prefix=iam_prefix))
 
         # apply tags to everything in the stack
         app_tags = self.node.try_get_context("Tags") or {}
@@ -519,6 +523,11 @@ echo
         # functions
         # custom resource to set the capacity at the right time
 
+        # maybe use this for setting up the role explicitly.
+        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_iam/Role.html#aws_cdk.aws_iam.Role.customize_roles
+        # set scope to each SDK call
+        # (should be 3). set desired instances, two lifecycle hooks.
+
         set_desired_instances_sdk_call = cr.AwsSdkCall(
             service="AutoScaling",
             action="updateAutoScalingGroup",
@@ -533,7 +542,6 @@ echo
         asg_update_resource = cr.AwsCustomResource(
             self,
             resource_name,
-            # function_name=iam_prefix+resource_name,
             on_create=set_desired_instances_sdk_call,
             on_update=set_desired_instances_sdk_call,  # update just does the same thing as create.
             policy=cr.AwsCustomResourcePolicy.from_statements(
