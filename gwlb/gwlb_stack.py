@@ -330,10 +330,11 @@ echo
 
         gwlb_subnets = vpc.select_subnets(subnet_group_name=data_subnet_name)
 
+        gwlb_name = f"NSB-GWLB-{self.stack_name}"
         gwlb = elbv2.CfnLoadBalancer(
             self,
             "GatewayLoadBalancer",
-            name=f"NSB-GWLB-{self.stack_name}",
+            name=gwlb_name,
             type="gateway",
             subnets=gwlb_subnets.subnet_ids,
             load_balancer_attributes=[
@@ -528,6 +529,33 @@ echo
         # set scope to each SDK call
         # (should be 3). set desired instances, two lifecycle hooks.
 
+        resource_name = "CustomResourceLambda"
+        custom_resource_role = iam.Role(
+            self,
+            resource_name,
+            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+            assumed_by=lambda_principal,
+            managed_policies=[
+                basic_lambda_policy,
+            ],
+            inline_policies={
+                "AsgSettings": iam.PolicyDocument(
+                    assign_sids=True,
+                    statements=[
+                        iam.PolicyStatement(
+                            actions=[
+                                "autoscaling:updateAutoScalingGroup",
+                                "autoscaling:DeleteLifecycleHook",
+                                "autoscaling:PutLifecycleHook",
+                            ],
+                            effect=iam.Effect.ALLOW,
+                            resources=[gwlb.ref],
+                        ),
+                    ],
+                )
+            },
+        )
+
         set_desired_instances_sdk_call = cr.AwsSdkCall(
             service="AutoScaling",
             action="updateAutoScalingGroup",
@@ -553,6 +581,11 @@ echo
                     )
                 ]
             ),
+        )
+
+        iam.Role.customize_roles(
+            asg_update_resource,
+            use_precreated_roles={"ServiceRole": custom_resource_role.role_name},
         )
 
         # cw logs for firewalls
