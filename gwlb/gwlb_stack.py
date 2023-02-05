@@ -2,18 +2,15 @@
 # https://github.com/sentialabs/geneve-proxy
 # https://datatracker.ietf.org/doc/rfc8926/
 
-# import os
 from os.path import join
 import json
 from datetime import datetime, timezone
 
-# import jsii
 from aws_cdk import (
     Duration,
     Stack,
     Tags,
     RemovalPolicy,
-    # Aspects, IAspect,
     CustomResource,
     aws_ec2 as ec2,
     aws_iam as iam,
@@ -25,24 +22,10 @@ from aws_cdk import (
     aws_logs as logs,
     aws_sns as sns,
     aws_sns_subscriptions as subscriptions,
-    # aws_s3 as s3,
-    # aws_s3_assets as s3_assets,
     aws_ssm as ssm,
     custom_resources as cr,
 )
 from constructs import Construct
-
-
-# @jsii.implements(IAspect)
-# class IamNameChecker():
-
-#     def __init__(self,prefix=None):
-#         self.prefix = prefix
-
-#     def visit(self, node):
-#         if isinstance(node, iam.Role):
-#             print(f"found role {node.role_name}")
-#             node.role_name = self.prefix + node.role_name
 
 
 class GwlbStack(Stack):
@@ -524,38 +507,6 @@ echo
         # functions
         # custom resource to set the capacity at the right time
 
-        # maybe use this for setting up the role explicitly.
-        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_iam/Role.html#aws_cdk.aws_iam.Role.customize_roles
-        # set scope to each SDK call
-        # (should be 3). set desired instances, two lifecycle hooks.
-
-        resource_name = "CustomResourceLambda"
-        custom_resource_role = iam.Role(
-            self,
-            resource_name,
-            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
-            assumed_by=lambda_principal,
-            managed_policies=[
-                basic_lambda_policy,
-            ],
-            inline_policies={
-                "AsgSettings": iam.PolicyDocument(
-                    assign_sids=True,
-                    statements=[
-                        iam.PolicyStatement(
-                            actions=[
-                                "autoscaling:updateAutoScalingGroup",
-                                "autoscaling:DeleteLifecycleHook",
-                                "autoscaling:PutLifecycleHook",
-                            ],
-                            effect=iam.Effect.ALLOW,
-                            resources=[gwlb.ref],
-                        ),
-                    ],
-                )
-            },
-        )
-
         set_desired_instances_sdk_call = cr.AwsSdkCall(
             service="AutoScaling",
             action="updateAutoScalingGroup",
@@ -581,11 +532,6 @@ echo
                     )
                 ]
             ),
-        )
-
-        iam.Role.customize_roles(
-            asg_update_resource,
-            use_precreated_roles={"ServiceRole": custom_resource_role.role_name},
         )
 
         # cw logs for firewalls
