@@ -831,7 +831,8 @@ echo
             "RegisterTargetIp",
             service="elasticLoadBalancingV2",
             action="registerTargets",
-            iam_resources=["*"],  # [target_group.ref],  #    #[asg_arn],
+            iam_resources=[target_group.ref],
+            iam_action="elasticloadbalancing:RegisterTargets",
             parameters={
                 "TargetGroupArn": target_group.ref,
                 "Targets": [
