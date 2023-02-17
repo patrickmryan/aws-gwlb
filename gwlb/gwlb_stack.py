@@ -780,7 +780,7 @@ echo
                     ]
                 },
             },
-            # result_path="$."
+            result_path="$.continue_lifecycle_action",
         )
 
         abandon_instance_task = sfn_tasks.CallAwsService(
@@ -803,19 +803,20 @@ echo
                     ]
                 },
             },
-            # result_path="$."
+            result_path="$.abandon_lifecycle_action",
         )
 
-        choice = sfn.Choice(self, "AddedInterfaces?", output_path="$.")
+        choice = sfn.Choice(self, "AddedInterfaces?")
         choice.when(
             sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"), "FAILED"
+                sfn.JsonPath.string_at("$.added_interfaces.Payload.interfaces_status"),
+                "FAILED",
             ),
             abandon_instance_task,
         )
         choice.when(
             sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
+                sfn.JsonPath.string_at("$.added_interfaces.Payload.interfaces_status"),
                 "SUCCEEDED",
             ),
             continue_instance_task,
@@ -830,12 +831,14 @@ echo
             "RegisterTargetIp",
             service="elasticLoadBalancingV2",
             action="registerTargets",
-            iam_resources=[target_group.ref],  # ["*"],   #[asg_arn],
+            iam_resources=["*"],  # [target_group.ref],  #    #[asg_arn],
             parameters={
                 "TargetGroupArn": target_group.ref,
                 "Targets": [
                     {
-                        "Id": sfn.JsonPath.string_at("$.added_interfaces.target_ip"),
+                        "Id": sfn.JsonPath.string_at(
+                            "$.added_interfaces.Payload.target_ip"
+                        ),
                         "Port": geneve_port,
                     }
                 ],

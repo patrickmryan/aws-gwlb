@@ -91,7 +91,7 @@ def create_tags(ec2_client=None, resource_id="", tags={}):
 def lambda_handler(event, context):
 
     print(json.dumps(event))
-    event_detail = event.copy()  # ["detail"]
+    event_detail = event["lifecycle_hook_details"]  # .copy()  # ["detail"]
 
     ec2_client = boto3.client("ec2")
     ssm_client = boto3.client("ssm")
@@ -275,9 +275,7 @@ def lambda_handler(event, context):
     )
 
     return {
-        # "added_interfaces": {
         # **event_detail,
         "target_ip": target_ip,
-        "interfaces_status": "SUCCEEDED"
-        # }
+        "interfaces_status": "SUCCEEDED",
     }
