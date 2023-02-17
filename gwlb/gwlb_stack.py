@@ -752,9 +752,34 @@ echo
         )
         start_state.next(add_interfaces_task)
 
-        # add API call for complete_hook
+        # add API task for complete_hook
+        # add choice task for success/failure
 
-        add_interfaces_task.next(sfn.Pass(self, "EndState"))
+        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_stepfunctions_tasks/CallAwsService.html
+        # https://pypi.org/project/aws-cdk.aws-stepfunctions-tasks/#aws-sdk
+        complete_hook_continue_task = sfn_tasks.CallAwsService(
+            self,
+            "HookContinue",
+            service="autoscaling",
+            action="completeLifecycleAction",
+            iam_resources=[asg_arn],  # ["*"],  #[asg.ref],
+            parameters={
+                "LifecycleActionResult": "CONTINUE",
+                "LifecycleActionToken": sfn.JsonPath.string_at(
+                    "$.Payload.LifecycleActionToken"
+                ),
+                "LifecycleHookName": sfn.JsonPath.string_at(
+                    "$.Payload.LifecycleHookName"
+                ),
+                "AutoScalingGroupName": sfn.JsonPath.string_at(
+                    "$.Payload.AutoScalingGroupName"
+                ),
+                "InstanceId": sfn.JsonPath.string_at("$.Payload.EC2InstanceId"),
+            },
+        )
+
+        add_interfaces_task.next(complete_hook_continue_task)
+        complete_hook_continue_task.next(sfn.Pass(self, "EndState"))
 
         state_machine = sfn.StateMachine(
             self, "StateMachine", definition=start_state, timeout=Duration.hours(1)
