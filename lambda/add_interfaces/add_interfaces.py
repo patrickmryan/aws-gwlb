@@ -88,27 +88,6 @@ def create_tags(ec2_client=None, resource_id="", tags={}):
     return response
 
 
-# def abandon_instance(event_detail={}, autoscaling=None):
-
-#     params = {
-#         "LifecycleHookName": event_detail["LifecycleHookName"],
-#         "AutoScalingGroupName": event_detail["AutoScalingGroupName"],
-#         "LifecycleActionToken": event_detail["LifecycleActionToken"],
-#         "LifecycleActionResult": "ABANDON",
-#         "InstanceId": event_detail["EC2InstanceId"],
-#     }
-#     print(f"calling autoscaling.complete_lifecycle_action({params})")
-
-#     try:
-#         print(json.dumps(params))
-#         response = autoscaling.complete_lifecycle_action(**params)
-#     except ClientError as e:
-#         message = "Error completing lifecycle action: {}".format(e)
-#         print(message)
-
-#     return response
-
-
 def lambda_handler(event, context):
 
     print(json.dumps(event))
@@ -116,7 +95,6 @@ def lambda_handler(event, context):
 
     ec2_client = boto3.client("ec2")
     ssm_client = boto3.client("ssm")
-    # autoscaling = boto3.client("autoscaling")
 
     resp = ssm_client.get_parameter(
         Name=os.environ["NETWORK_CONFIGURATION_SSM_PARAM"], WithDecryption=True
@@ -218,7 +196,7 @@ def lambda_handler(event, context):
                 + " instead"
             )
             print(message)
-            raise Exception(message)
+            raise ValueError(message)
 
         subnet_id = subnets[0]["SubnetId"]
 
@@ -290,14 +268,12 @@ def lambda_handler(event, context):
 
         # response = abandon_instance(event_detail=event_detail, autoscaling=autoscaling)
 
-        return {"status": "FAILED"}
+        return {**event_detail, "status": "FAILED"}
 
     # record the target IP in a tag on the instance. we'll need the info
     # when the instance terminates.
     response = ec2_client.create_tags(
         Resources=[instance_id], Tags=[{"Key": "TARGET_IP", "Value": private_ip}]
     )
-
-    # return {"status": "SUCCEEDED", "event_detail": event_detail}
 
     return {**event_detail, "status": "SUCCEEDED"}
