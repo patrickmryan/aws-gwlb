@@ -484,7 +484,7 @@ echo
             # cooldown="60",   #Duration.minutes(1),
             # desired_capacity="0",  # zero for a reason
             min_size="0",
-            max_size=str(0),  # testing str(max_azs * 2),
+            max_size=str(max_azs * 2),
             health_check_type="EC2",
             health_check_grace_period=60,
             # group_metrics=[autoscaling.GroupMetrics.all()],
@@ -578,7 +578,7 @@ echo
             action="updateAutoScalingGroup",
             parameters={
                 "AutoScalingGroupName": asg_name,
-                "DesiredCapacity": max_azs,
+                "DesiredCapacity": 0,  # max_azs,
             },
             physical_resource_id=cr.PhysicalResourceId.of("PutDesiredInstancesSetting"),
         )
@@ -725,14 +725,7 @@ echo
         # Bad things can happen if the ASG starts spinning up instances before the
         # lifecycle hook lambdas and rules are deployed
 
-        # Now set up the lifecycle hooks for launching and terminating events.
-
-        lambda_env = {
-            "TARGET_GROUP_ARN": target_group.ref,
-            "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
-        }
-
-        # build the state machine
+        # Build the state machine
 
         add_interfaces_lambda = _lambda.Function(
             self,
@@ -744,6 +737,7 @@ echo
             vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
             environment={
                 "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
+                "TARGET_GROUP_ARN": target_group.ref,
             },
             **lambda_settings,
         )
@@ -755,11 +749,16 @@ echo
             self, "AddInterfacesTask", lambda_function=add_interfaces_lambda
         )
         start_state.next(add_interfaces_task)
+
+        # add API call for complete_hook
+
         add_interfaces_task.next(sfn.Pass(self, "EndState"))
 
         state_machine = sfn.StateMachine(
             self, "StateMachine", definition=start_state, timeout=Duration.hours(1)
         )
+
+        # Now set up the lifecycle hooks for launching and terminating events.
 
         launching_rule = self.add_lifecycle_hook(
             construct_id="Launching",
@@ -795,7 +794,7 @@ echo
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "terminating_hook")),
             lambda_settings=lambda_settings,
             lambda_handler="terminating_hook.lambda_handler",
-            lambda_env=lambda_env,
+            lambda_env={"TARGET_GROUP_ARN": target_group.ref},
             vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
             lifecycle_transition="autoscaling:EC2_INSTANCE_TERMINATING",
             default_result="CONTINUE",
@@ -844,10 +843,10 @@ echo
             "secretsmanager",
             "autoscaling",
             "elasticloadbalancing",
-            # logs
-            # cloudwatch
-            # stepfunction
-            # lambda?
+            "states",
+            "logs",
+            # "cloudwatch"
+            # "lambda"?
         ]
         subnets = (self.vpc.select_subnets(subnet_group_name="management")).subnets
         for name in service_names:

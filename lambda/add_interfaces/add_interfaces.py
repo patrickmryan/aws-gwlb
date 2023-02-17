@@ -112,10 +112,10 @@ def create_tags(ec2_client=None, resource_id="", tags={}):
 def lambda_handler(event, context):
 
     print(json.dumps(event))
-    event_detail = event["detail"]
+    event_detail = event.copy()  # ["detail"]
 
     ec2_client = boto3.client("ec2")
-    # autoscaling = boto3.client("autoscaling")
+    autoscaling = boto3.client("autoscaling")
     ssm_client = boto3.client("ssm")
 
     resp = ssm_client.get_parameter(
@@ -298,23 +298,23 @@ def lambda_handler(event, context):
         Resources=[instance_id], Tags=[{"Key": "TARGET_IP", "Value": private_ip}]
     )
 
-    return {"status": "SUCCEEDED"}
+    params = {
+        "LifecycleHookName": event_detail["LifecycleHookName"],
+        "AutoScalingGroupName": event_detail["AutoScalingGroupName"],
+        "LifecycleActionToken": event_detail["LifecycleActionToken"],
+        "LifecycleActionResult": "CONTINUE",
+        "InstanceId": event_detail["EC2InstanceId"],
+    }
+    print(f"calling autoscaling.complete_lifecycle_action({params})")
 
-    # params = {
-    #     "LifecycleHookName": event_detail["LifecycleHookName"],
-    #     "AutoScalingGroupName": event_detail["AutoScalingGroupName"],
-    #     "LifecycleActionToken": event_detail["LifecycleActionToken"],
-    #     "LifecycleActionResult": "CONTINUE",
-    #     "InstanceId": event_detail["EC2InstanceId"],
-    # }
-    # print(f"calling autoscaling.complete_lifecycle_action({params})")
+    try:
+        print(json.dumps(params))
+        response = autoscaling.complete_lifecycle_action(**params)
 
-    # try:
-    #     print(json.dumps(params))
-    #     response = autoscaling.complete_lifecycle_action(**params)
+    except ClientError as e:
+        message = "Error completing lifecycle action: {}".format(e)
+        print(message)
 
-    # except ClientError as e:
-    #     message = "Error completing lifecycle action: {}".format(e)
-    #     print(message)
+    print(response)
 
-    # print(response)
+    return {"status": "SUCCEEDED", "event_detail": event_detail}
