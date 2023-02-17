@@ -748,7 +748,10 @@ echo
         start_state = sfn.Pass(self, "StartState")
 
         add_interfaces_task = sfn_tasks.LambdaInvoke(
-            self, "AddInterfacesTask", lambda_function=add_interfaces_lambda
+            self,
+            "AddInterfacesTask",
+            lambda_function=add_interfaces_lambda,
+            # result_path="$.result"
         )
         start_state.next(add_interfaces_task)
 
@@ -757,29 +760,68 @@ echo
 
         # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_stepfunctions_tasks/CallAwsService.html
         # https://pypi.org/project/aws-cdk.aws-stepfunctions-tasks/#aws-sdk
-        complete_hook_continue_task = sfn_tasks.CallAwsService(
+        continue_instance_task = sfn_tasks.CallAwsService(
             self,
-            "HookContinue",
+            "ContinueInstance",
             service="autoscaling",
             action="completeLifecycleAction",
-            iam_resources=[asg_arn],  # ["*"],  #[asg.ref],
+            iam_resources=[asg_arn],
             parameters={
                 "LifecycleActionResult": "CONTINUE",
-                "LifecycleActionToken": sfn.JsonPath.string_at(
-                    "$.Payload.LifecycleActionToken"
-                ),
-                "LifecycleHookName": sfn.JsonPath.string_at(
-                    "$.Payload.LifecycleHookName"
-                ),
-                "AutoScalingGroupName": sfn.JsonPath.string_at(
-                    "$.Payload.AutoScalingGroupName"
-                ),
                 "InstanceId": sfn.JsonPath.string_at("$.Payload.EC2InstanceId"),
+                **{
+                    param: sfn.JsonPath.string_at(f"$.Payload.{param}")
+                    for param in [
+                        "LifecycleActionToken",
+                        "LifecycleHookName",
+                        "AutoScalingGroupName",
+                    ]
+                },
             },
         )
 
-        add_interfaces_task.next(complete_hook_continue_task)
-        complete_hook_continue_task.next(sfn.Pass(self, "EndState"))
+        abandon_instance_task = sfn_tasks.CallAwsService(
+            self,
+            "AbandonInstance",
+            service="autoscaling",
+            action="completeLifecycleAction",
+            iam_resources=[asg_arn],
+            parameters={
+                "LifecycleActionResult": "ABANDON",
+                "InstanceId": sfn.JsonPath.string_at("$.Payload.EC2InstanceId"),
+                **{
+                    param: sfn.JsonPath.string_at(f"$.Payload.{param}")
+                    for param in [
+                        "LifecycleActionToken",
+                        "LifecycleHookName",
+                        "AutoScalingGroupName",
+                    ]
+                },
+            },
+        )
+
+        choice = sfn.Choice(self, "AddedInterfaces?")
+        choice.when(
+            sfn.Condition.string_equals(
+                sfn.JsonPath.string_at("$.Payload.status"), "FAILED"
+            ),
+            abandon_instance_task,
+        )
+        choice.when(
+            sfn.Condition.string_equals(
+                sfn.JsonPath.string_at("$.Payload.status"), "SUCCEEDED"
+            ),
+            continue_instance_task,
+        )
+
+        add_interfaces_task.next(choice)
+
+        wait = sfn.Wait(self, "Wait", time=sfn.WaitTime.duration(Duration.minutes(1)))
+
+        continue_instance_task.next(wait.next(sfn.Pass(self, "SucceededState")))
+        abandon_instance_task.next(sfn.Fail(self, "FailedState"))
+
+        # register ENI with target group toward the end
 
         state_machine = sfn.StateMachine(
             self, "StateMachine", definition=start_state, timeout=Duration.hours(1)

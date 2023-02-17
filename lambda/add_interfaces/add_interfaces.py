@@ -252,28 +252,26 @@ def lambda_handler(event, context):
 
     tg_arn = os.environ["TARGET_GROUP_ARN"]
     target_eni = network_interfaces[target_index]
-    private_ip = target_eni["PrivateIpAddress"]
+    target_ip = target_eni["PrivateIpAddress"]
 
     try:
         print(
-            f"registering eth{target_index}, {private_ip}:{geneve_port} with target group {tg_arn}"
+            f"registering eth{target_index}, {target_ip}:{geneve_port} with target group {tg_arn}"
         )
         response = elb_client.register_targets(
-            TargetGroupArn=tg_arn, Targets=[{"Id": private_ip, "Port": geneve_port}]
+            TargetGroupArn=tg_arn, Targets=[{"Id": target_ip, "Port": geneve_port}]
         )
         print("success")
     except ClientError as e:
         print(e)
-        print(f"Error registering IP : {private_ip} to {tg_arn}. abandoning instance.")
-
-        # response = abandon_instance(event_detail=event_detail, autoscaling=autoscaling)
+        print(f"Error registering IP : {target_ip} to {tg_arn}. abandoning instance.")
 
         return {**event_detail, "status": "FAILED"}
 
     # record the target IP in a tag on the instance. we'll need the info
     # when the instance terminates.
     response = ec2_client.create_tags(
-        Resources=[instance_id], Tags=[{"Key": "TARGET_IP", "Value": private_ip}]
+        Resources=[instance_id], Tags=[{"Key": "TARGET_IP", "Value": target_ip}]
     )
 
-    return {**event_detail, "status": "SUCCEEDED"}
+    return {**event_detail, "target_ip": target_ip, "status": "SUCCEEDED"}
