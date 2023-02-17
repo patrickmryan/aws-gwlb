@@ -751,7 +751,7 @@ echo
             self,
             "AddInterfacesTask",
             lambda_function=add_interfaces_lambda,
-            # result_path="$.result"
+            result_path="$.added_interfaces",  # was None
         )
         start_state.next(add_interfaces_task)
 
@@ -768,9 +768,11 @@ echo
             iam_resources=[asg_arn],
             parameters={
                 "LifecycleActionResult": "CONTINUE",
-                "InstanceId": sfn.JsonPath.string_at("$.Payload.EC2InstanceId"),
+                "InstanceId": sfn.JsonPath.string_at(
+                    "$.lifecycle_hook_details.EC2InstanceId"
+                ),
                 **{
-                    param: sfn.JsonPath.string_at(f"$.Payload.{param}")
+                    param: sfn.JsonPath.string_at(f"$.lifecycle_hook_details.{param}")
                     for param in [
                         "LifecycleActionToken",
                         "LifecycleHookName",
@@ -778,6 +780,7 @@ echo
                     ]
                 },
             },
+            # result_path="$."
         )
 
         abandon_instance_task = sfn_tasks.CallAwsService(
@@ -788,9 +791,11 @@ echo
             iam_resources=[asg_arn],
             parameters={
                 "LifecycleActionResult": "ABANDON",
-                "InstanceId": sfn.JsonPath.string_at("$.Payload.EC2InstanceId"),
+                "InstanceId": sfn.JsonPath.string_at(
+                    "$.lifecycle_hook_details.EC2InstanceId"
+                ),
                 **{
-                    param: sfn.JsonPath.string_at(f"$.Payload.{param}")
+                    param: sfn.JsonPath.string_at(f"$.lifecycle_hook_details.{param}")
                     for param in [
                         "LifecycleActionToken",
                         "LifecycleHookName",
@@ -798,27 +803,50 @@ echo
                     ]
                 },
             },
+            # result_path="$."
         )
 
-        choice = sfn.Choice(self, "AddedInterfaces?")
+        choice = sfn.Choice(self, "AddedInterfaces?", output_path="$.")
         choice.when(
             sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.Payload.status"), "FAILED"
+                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"), "FAILED"
             ),
             abandon_instance_task,
         )
         choice.when(
             sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.Payload.status"), "SUCCEEDED"
+                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
+                "SUCCEEDED",
             ),
             continue_instance_task,
         )
 
         add_interfaces_task.next(choice)
 
-        wait = sfn.Wait(self, "Wait", time=sfn.WaitTime.duration(Duration.minutes(1)))
+        wait = sfn.Wait(self, "Wait", time=sfn.WaitTime.duration(Duration.seconds(10)))
 
-        continue_instance_task.next(wait.next(sfn.Pass(self, "SucceededState")))
+        register_target_ip_task = sfn_tasks.CallAwsService(
+            self,
+            "RegisterTargetIp",
+            service="elasticLoadBalancingV2",
+            action="registerTargets",
+            iam_resources=[target_group.ref],  # ["*"],   #[asg_arn],
+            parameters={
+                "TargetGroupArn": target_group.ref,
+                "Targets": [
+                    {
+                        "Id": sfn.JsonPath.string_at("$.added_interfaces.target_ip"),
+                        "Port": geneve_port,
+                    }
+                ],
+            },
+        )
+
+        # continue_instance_task.next(wait.next(sfn.Pass(self, "SucceededState")))
+        continue_instance_task.next(wait)
+        wait.next(register_target_ip_task)
+        register_target_ip_task.next(sfn.Pass(self, "SucceededState"))
+
         abandon_instance_task.next(sfn.Fail(self, "FailedState"))
 
         # register ENI with target group toward the end
