@@ -23,6 +23,8 @@ from aws_cdk import (
     aws_sns as sns,
     aws_sns_subscriptions as subscriptions,
     aws_ssm as ssm,
+    aws_stepfunctions as sfn,
+    aws_stepfunctions_tasks as sfn_tasks,
     custom_resources as cr,
 )
 from constructs import Construct
@@ -627,7 +629,6 @@ echo
                                 "elasticloadbalancing:RegisterTargets",
                                 "elasticloadbalancing:DeregisterTargets",
                             ],
-                            # resources=["*"],
                             resources=[target_group.ref],
                         ),
                         iam.PolicyStatement(
@@ -638,13 +639,17 @@ echo
                                 "ec2:AttachNetworkInterface*",
                                 "ec2:CreateTags",
                             ],
-                            # actions=["ec2:*"],  # need to narrow this down
                             resources=["*"],
                         ),
                         iam.PolicyStatement(
                             effect=iam.Effect.ALLOW,
                             actions=["ec2:CreateTags"],
                             resources=[acct_instances_arn],
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=["states:StartExecution"],
+                            resources=["*"],  #   narrower
                         ),
                     ],
                 )
@@ -654,7 +659,7 @@ echo
 
         # Make sure the launching rule and lambda are created before the ASG.
         # Bad things can happen if the ASG starts spinning up instances before the
-        # lifecycle hook lambdas and rules are deployed.
+        # lifecycle hook lambdas and rules are deployed
 
         # Now set up the lifecycle hooks for launching and terminating events.
 
@@ -662,6 +667,33 @@ echo
             "TARGET_GROUP_ARN": target_group.ref,
             "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
         }
+
+        # build the state machine
+
+        add_interfaces_lambda = _lambda.Function(
+            self,
+            "AddInterfaces",
+            code=_lambda.Code.from_asset(join(lambda_root, "add_interfaces")),
+            handler="add_interfaces.lambda_handler",
+            role=lifecycle_hook_role,
+            environment={
+                "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
+            },
+            **lambda_settings,
+        )
+
+        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_stepfunctions/Choice.html
+        start_state = sfn.Pass(self, "StartState")
+
+        add_interfaces_task = sfn_tasks.LambdaInvoke(
+            self, "AddInterfacesTask", lambda_function=add_interfaces_lambda
+        )
+        start_state.next(add_interfaces_task)
+        add_interfaces_task.next(sfn.Pass(self, "EndState"))
+
+        state_machine = sfn.StateMachine(
+            self, "StateMachine", definition=start_state, timeout=Duration.hours(1)
+        )
 
         launching_rule = self.add_lifecycle_hook(
             construct_id="Launching",
@@ -672,7 +704,11 @@ echo
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
             lambda_settings=lambda_settings,
             lambda_handler="launching_hook.lambda_handler",
-            lambda_env=lambda_env,
+            lambda_env={
+                "TARGET_GROUP_ARN": target_group.ref,
+                "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
+                "STATE_MACHINE_ARN": state_machine.state_machine_arn,
+            },
             lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
             default_result="ABANDON",
         )
