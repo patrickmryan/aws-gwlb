@@ -39,19 +39,21 @@ class SecurityVpcType:  # this really need to be a new construct
 
     def subnet_configurations(self, subnet_cidr_mask=None):
 
-        subnet_names = ["trusted", "management"]
         return [
             ec2.SubnetConfiguration(
-                name=name,
+                name="trusted",
                 subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
                 cidr_mask=subnet_cidr_mask,
-            )
-            for name in subnet_names
+            ),
+            ec2.SubnetConfiguration(
+                name="management",
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                cidr_mask=subnet_cidr_mask,
+            ),
         ]
 
     def add_return_routes(
         self,
-        vpc=None,
         subnet_name=None,
         cidr_ranges=[],
         tg_attachment=None,
