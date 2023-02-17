@@ -30,6 +30,93 @@ from aws_cdk import (
 from constructs import Construct
 
 
+class SecurityVpcType:  # this really need to be a new construct
+    def __init__(self, stack=None):
+        self.stack = stack
+
+    def nat_gateway_provider(self):
+        return None
+
+    def subnet_configurations(self, subnet_cidr_mask=None):
+
+        subnet_names = ["trusted", "management"]
+        return [
+            ec2.SubnetConfiguration(
+                name=name,
+                subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
+                cidr_mask=subnet_cidr_mask,
+            )
+            for name in subnet_names
+        ]
+
+    def add_return_routes(
+        self,
+        vpc=None,
+        subnet_name=None,
+        cidr_ranges=[],
+        tg_attachment=None,
+        router_id=None,
+    ):
+
+        subnets = (self.vpc.select_subnets(subnet_group_name=subnet_name)).subnets
+
+        for subnet_index, subnet in enumerate(subnets):
+            for range_index, cidr_range in enumerate(cidr_ranges):
+
+                # Have to do this via CfnRoute instead of subnet.add_route
+                # because CDK seems not to know that it can't create
+                # a route back to the TG until the attachment is available.
+                # So we explicitly add the dependency. Annoying.
+
+                route = ec2.CfnRoute(
+                    self.stack,
+                    f"{subnet_name}-Route-{subnet_index}-{range_index}",
+                    route_table_id=subnet.route_table.route_table_id,
+                    transit_gateway_id=router_id,
+                    destination_cidr_block=cidr_range,
+                )
+                route.add_dependency(tg_attachment)
+
+    @staticmethod
+    def for_type_named(vpc_type_param, stack=None):
+
+        if vpc_type_param == "NorthSouth":
+            return NorthSouth(stack=stack)
+
+        if vpc_type_param == "EastWest":
+            return EastWest(stack=stack)
+
+        return None
+
+
+class NorthSouth(SecurityVpcType):
+    def nat_gateway_provider(self):
+        return ec2.NatProvider.gateway()
+
+    def subnet_configurations(self, subnet_cidr_mask=None):
+        configs = super().subnet_configurations(subnet_cidr_mask=subnet_cidr_mask)
+
+        config = ec2.SubnetConfiguration(
+            name="public",
+            subnet_type=ec2.SubnetType.PUBLIC,
+            cidr_mask=subnet_cidr_mask,
+        )
+        configs.append(config)
+
+        config = ec2.SubnetConfiguration(
+            name="data",  # "delta",
+            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+            cidr_mask=subnet_cidr_mask,
+        )
+        configs.append(config)
+
+        return configs
+
+
+class EastWest(SecurityVpcType):
+    pass
+
+
 class GwlbStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -58,7 +145,6 @@ class GwlbStack(Stack):
             iam.PermissionsBoundary.of(self).apply(policy)
 
         iam_prefix = "TESTNetwork"
-        # Aspects.of(self).add(IamNameChecker(prefix=iam_prefix))
 
         # apply tags to everything in the stack
         app_tags = self.node.try_get_context("Tags") or {}
@@ -67,41 +153,14 @@ class GwlbStack(Stack):
 
         cidr_range = self.node.try_get_context("CidrRange") or "10.0.0.0/16"
         max_azs = self.node.try_get_context("MaxAZs") or 2
-        subnet_configs = []
         subnet_cidr_mask = 27
 
-        subnet_names = ["egress", "data", "management", "trusted"]
-
-        config = ec2.SubnetConfiguration(
-            name="egress",
-            subnet_type=ec2.SubnetType.PUBLIC,
-            cidr_mask=subnet_cidr_mask,
-        )
-        subnet_configs.append(config)
-
-        config = ec2.SubnetConfiguration(
-            name="management",
-            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
-            cidr_mask=subnet_cidr_mask,
-        )
-        subnet_configs.append(config)
-
-        config = ec2.SubnetConfiguration(
-            name="data",
-            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
-            cidr_mask=subnet_cidr_mask,
-        )
-        subnet_configs.append(config)
-
-        config = ec2.SubnetConfiguration(
-            name="trusted",
-            subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
-            cidr_mask=subnet_cidr_mask,
+        vpc_type = SecurityVpcType.for_type_named("NorthSouth", stack=self)
+        subnet_configs = vpc_type.subnet_configurations(
+            subnet_cidr_mask=subnet_cidr_mask
         )
 
-        subnet_configs.append(config)
-
-        vpc = ec2.Vpc(
+        self.vpc = ec2.Vpc(
             self,
             "GwlbVpc",
             ip_addresses=ec2.IpAddresses.cidr(cidr_range),
@@ -119,14 +178,15 @@ class GwlbStack(Stack):
             string_value=json.dumps(network_interface_config, indent=2),
         )
 
+        subnet_names = [config.name for config in subnet_configs]
         for subnet_name in subnet_names:
-            subnets = (vpc.select_subnets(subnet_group_name=subnet_name)).subnets
+            subnets = (self.vpc.select_subnets(subnet_group_name=subnet_name)).subnets
             for subnet in subnets:
                 Tags.of(subnet).add("ROLE", subnet_name)
 
         # The GWLB endpoints and the firewall instances all reside in the same subnet.
-        intra_vpc = ec2.Peer.ipv4(vpc.vpc_cidr_block)
-        template_sg = ec2.SecurityGroup(self, "GeneveProxySG", vpc=vpc)
+        intra_vpc = ec2.Peer.ipv4(self.vpc.vpc_cidr_block)
+        template_sg = ec2.SecurityGroup(self, "GeneveProxySG", vpc=self.vpc)
         geneve_port = 6081
         template_sg.connections.allow_from(
             intra_vpc,
@@ -136,14 +196,13 @@ class GwlbStack(Stack):
         template_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
         Tags.of(template_sg).add("ROLE", "data")
 
-        management_sg = ec2.SecurityGroup(self, "ManagementSG", vpc=vpc)
+        management_sg = ec2.SecurityGroup(self, "ManagementSG", vpc=self.vpc)
         management_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
         Tags.of(management_sg).add("ROLE", "management")
 
         ami = ec2.MachineImage.latest_amazon_linux(
             generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
         )
-        # assets = s3_assets.Asset(self, "ConfigFiles", path="assets")
 
         user_data = ec2.UserData.for_linux()
 
@@ -298,7 +357,7 @@ echo
         )
 
         # the LB uses the subnets that will be used for eth0
-        primary_subnets = vpc.select_subnets(
+        primary_subnets = self.vpc.select_subnets(
             subnet_group_name=network_interface_config["0"]["ROLE"]
         )
 
@@ -313,7 +372,8 @@ echo
         )
         data_subnet_name = network_interface_config[data_subnet_key]["ROLE"]
 
-        gwlb_subnets = vpc.select_subnets(subnet_group_name=data_subnet_name)
+        gwlb_subnets = self.vpc.select_subnets(subnet_group_name=data_subnet_name)
+        lambda_subnets = self.vpc.select_subnets(subnet_group_name="management")
 
         gwlb_name = f"NSB-GWLB-{self.stack_name}"
         gwlb = elbv2.CfnLoadBalancer(
@@ -366,13 +426,13 @@ echo
 
         service_name = retrieve_vpce_service_name.get_att_string("ServiceName")
         vpc_endpoints = {}
-        for az in vpc.availability_zones:
+        for az in self.vpc.availability_zones:
             vpc_endpoints[az] = ec2.CfnVPCEndpoint(
                 self,
                 f"VPCE-{az}",
-                vpc_id=vpc.vpc_id,
+                vpc_id=self.vpc.vpc_id,
                 subnet_ids=(
-                    vpc.select_subnets(
+                    self.vpc.select_subnets(
                         subnet_group_name=data_subnet_name, availability_zones=[az]
                     )
                 ).subnet_ids,
@@ -392,7 +452,7 @@ echo
             protocol="GENEVE",
             target_type="ip",
             unhealthy_threshold_count=3,
-            vpc_id=vpc.vpc_id,
+            vpc_id=self.vpc.vpc_id,
         )
 
         # topic for autoscaling events
@@ -424,7 +484,7 @@ echo
             # cooldown="60",   #Duration.minutes(1),
             # desired_capacity="0",  # zero for a reason
             min_size="0",
-            max_size=str(max_azs * 2),
+            max_size=str(0),  # testing str(max_azs * 2),
             health_check_type="EC2",
             health_check_grace_period=60,
             # group_metrics=[autoscaling.GroupMetrics.all()],
@@ -470,13 +530,17 @@ echo
         #  trusted:  default to VPCE per AZ
         #  edge: subnet CIDR to VPCE per AZ
 
-        edge_route_table = ec2.CfnRouteTable(self, "EdgeRouteTable", vpc_id=vpc.vpc_id)
+        edge_route_table = ec2.CfnRouteTable(
+            self, "EdgeRouteTable", vpc_id=self.vpc.vpc_id
+        )
         Tags.of(edge_route_table).add("Name", "EdgeRouteTable")
 
         for az, vpce in vpc_endpoints.items():
 
             subnets = (
-                vpc.select_subnets(subnet_group_name="trusted", availability_zones=[az])
+                self.vpc.select_subnets(
+                    subnet_group_name="trusted", availability_zones=[az]
+                )
             ).subnets
 
             for n, subnet in enumerate(subnets):
@@ -502,7 +566,7 @@ echo
             self,
             "EdgeRouteTableAssociation",
             route_table_id=edge_route_table.attr_route_table_id,
-            gateway_id=vpc.internet_gateway_id,
+            gateway_id=self.vpc.internet_gateway_id,
         )
 
         # lifeycle hook
@@ -676,6 +740,8 @@ echo
             code=_lambda.Code.from_asset(join(lambda_root, "add_interfaces")),
             handler="add_interfaces.lambda_handler",
             role=lifecycle_hook_role,
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
             environment={
                 "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
             },
@@ -709,6 +775,7 @@ echo
                 "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
                 "STATE_MACHINE_ARN": state_machine.state_machine_arn,
             },
+            vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
             lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
             default_result="ABANDON",
         )
@@ -729,6 +796,7 @@ echo
             lambda_settings=lambda_settings,
             lambda_handler="terminating_hook.lambda_handler",
             lambda_env=lambda_env,
+            vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
             lifecycle_transition="autoscaling:EC2_INSTANCE_TERMINATING",
             default_result="CONTINUE",
         )
@@ -762,10 +830,33 @@ echo
             )
 
             self.launch_test_instance(
-                vpc=vpc,
                 role=instance_role,
                 vpc_subnets=ec2.SubnetSelection(subnet_group_name="trusted"),
             )
+
+        # add VPC endpoints for ec2, ssm, secretsmanager, autoscaling, elbv2
+
+        service_names = [
+            "ec2",
+            "ssm",
+            "ssmmessages",
+            "ec2messages",
+            "secretsmanager",
+            "autoscaling",
+            "elasticloadbalancing",
+            # logs
+            # cloudwatch
+            # stepfunction
+            # lambda?
+        ]
+        subnets = (self.vpc.select_subnets(subnet_group_name="management")).subnets
+        for name in service_names:
+            endpoint = self.vpc.add_interface_endpoint(
+                f"{name}Endpoint",
+                service=ec2.InterfaceVpcEndpointAwsService(name),
+                subnets=ec2.SubnetSelection(subnets=subnets),
+            )
+            Tags.of(endpoint).add("Name", f"{name}-{self.stack_name}")
 
     def add_lifecycle_hook(
         self,
@@ -778,6 +869,7 @@ echo
         lambda_settings={},
         lambda_env={},
         lambda_handler=None,
+        vpc_subnets=None,
         lifecycle_transition=None,
         default_result=None,
     ):
@@ -789,6 +881,8 @@ echo
             handler=lambda_handler,
             role=lifecycle_hook_role,
             environment=lambda_env,
+            vpc=self.vpc,
+            vpc_subnets=vpc_subnets,
             **lambda_settings,
         )
 
@@ -877,9 +971,7 @@ echo
 
         return lifecycle_rule
 
-    def launch_test_instance(
-        self, vpc=None, vpc_subnets=None, role=None, key_name=None
-    ):
+    def launch_test_instance(self, vpc_subnets=None, role=None, key_name=None):
 
         optional_params = {}
         if key_name:
@@ -888,7 +980,7 @@ echo
         test_instance = ec2.Instance(
             self,
             "TestInstance",
-            vpc=vpc,
+            vpc=self.vpc,
             vpc_subnets=vpc_subnets,
             machine_image=ec2.MachineImage.latest_amazon_linux(),
             instance_type=ec2.InstanceType.of(

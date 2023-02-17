@@ -18,7 +18,7 @@ def lambda_handler(event, context):
 
     state_machine_arn = os.environ.get("STATE_MACHINE_ARN")
 
-    sfn_client = boto3.client("states")
+    sfn_client = boto3.client("stepfunctions")
 
     # Need a provide a one-time key to the new FTDv. It will be used when
     # the FTDv is registered to FMC.
