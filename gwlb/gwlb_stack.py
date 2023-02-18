@@ -745,6 +745,7 @@ echo
         )
 
         # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_stepfunctions/Choice.html
+        # https://docs.aws.amazon.com/step-functions/latest/dg/input-output-inputpath-params.html
         start_state = sfn.Pass(self, "StartState")
 
         add_interfaces_task = sfn_tasks.LambdaInvoke(
@@ -752,6 +753,10 @@ echo
             "AddInterfacesTask",
             lambda_function=add_interfaces_lambda,
             result_path="$.added_interfaces",  # was None
+            result_selector={
+                "target_ip.$": "$.Payload.target_ip",
+                "interfaces_status.$": "$.Payload.interfaces_status",
+            },
         )
         start_state.next(add_interfaces_task)
 
@@ -809,14 +814,14 @@ echo
         choice = sfn.Choice(self, "AddedInterfaces?")
         choice.when(
             sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.added_interfaces.Payload.interfaces_status"),
+                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
                 "FAILED",
             ),
             abandon_instance_task,
         )
         choice.when(
             sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.added_interfaces.Payload.interfaces_status"),
+                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
                 "SUCCEEDED",
             ),
             continue_instance_task,
@@ -837,9 +842,7 @@ echo
                 "TargetGroupArn": target_group.ref,
                 "Targets": [
                     {
-                        "Id": sfn.JsonPath.string_at(
-                            "$.added_interfaces.Payload.target_ip"
-                        ),
+                        "Id": sfn.JsonPath.string_at("$.added_interfaces.target_ip"),
                         "Port": geneve_port,
                     }
                 ],
