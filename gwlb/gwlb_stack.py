@@ -785,7 +785,8 @@ echo
                     ]
                 },
             },
-            result_path="$.continue_lifecycle_action",
+            output_path="$"
+            # result_path="$.continue_lifecycle_action",
         )
 
         abandon_instance_task = sfn_tasks.CallAwsService(
@@ -808,28 +809,45 @@ echo
                     ]
                 },
             },
-            result_path="$.abandon_lifecycle_action",
+            # result_path="$.abandon_lifecycle_action",
         )
 
-        choice = sfn.Choice(self, "AddedInterfaces?")
-        choice.when(
+        check_health_lambda = _lambda.Function(
+            self,
+            "CheckHealth",
+            code=_lambda.Code.from_asset(join(lambda_root, "check_health")),
+            handler="check_health.lambda_handler",
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
+            **lambda_settings,
+        )
+
+        check_health_task = sfn_tasks.LambdaInvoke(
+            self,
+            "CheckHealthTask",
+            lambda_function=check_health_lambda,
+            payload=sfn.TaskInput.from_json_path_at("$.added_interfaces"),
+            result_path="$.health_status",
+            result_selector={"status.$": "$.Payload.status"},
+        )
+
+        added_interfaces_choice = sfn.Choice(self, "AddedInterfaces?")
+        added_interfaces_choice.when(
             sfn.Condition.string_equals(
                 sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
                 "FAILED",
             ),
             abandon_instance_task,
         )
-        choice.when(
+        added_interfaces_choice.when(
             sfn.Condition.string_equals(
                 sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
                 "SUCCEEDED",
             ),
-            continue_instance_task,
+            check_health_task,
         )
 
-        add_interfaces_task.next(choice)
-
-        wait = sfn.Wait(self, "Wait", time=sfn.WaitTime.duration(Duration.seconds(10)))
+        add_interfaces_task.next(added_interfaces_choice)
 
         register_target_ip_task = sfn_tasks.CallAwsService(
             self,
@@ -847,14 +865,36 @@ echo
                     }
                 ],
             },
+            output_path="$",
         )
 
-        # continue_instance_task.next(wait.next(sfn.Pass(self, "SucceededState")))
-        continue_instance_task.next(wait)
-        wait.next(register_target_ip_task)
-        register_target_ip_task.next(sfn.Pass(self, "SucceededState"))
+        wait_and_recheck = sfn.Wait(
+            self, "WaitAndRecheck", time=sfn.WaitTime.duration(Duration.seconds(30))
+        )
 
-        abandon_instance_task.next(sfn.Fail(self, "FailedState"))
+        checked_health_choice = sfn.Choice(self, "Healthy?")
+        checked_health_choice.when(
+            sfn.Condition.string_equals(
+                sfn.JsonPath.string_at("$.health_status.status"),
+                "UNHEALTHY",
+            ),
+            wait_and_recheck,
+        )
+        checked_health_choice.when(
+            sfn.Condition.string_equals(
+                sfn.JsonPath.string_at("$.health_status.status"),
+                "HEALTHY",
+            ),
+            register_target_ip_task,
+        )
+
+        wait_and_recheck.next(check_health_task)
+        check_health_task.next(checked_health_choice)
+
+        register_target_ip_task.next(continue_instance_task)
+        continue_instance_task.next(sfn.Pass(self, "Succeeded"))
+
+        abandon_instance_task.next(sfn.Fail(self, "Failed"))
 
         # register ENI with target group toward the end
 

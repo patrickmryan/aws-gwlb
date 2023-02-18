@@ -2,7 +2,7 @@ import sys
 import json
 import urllib3
 from urllib3.util import Timeout
-import ssl
+from urllib3.exceptions import RequestError, HTTPError
 
 
 def lambda_handler(event, context):
@@ -11,24 +11,28 @@ def lambda_handler(event, context):
 
     target_ip = event["target_ip"]
 
-    http_client = urllib3.PoolManager(
-        cert_reqs=ssl.CERT_NONE, timeout=Timeout(total=15)
-    )
+    http_client = urllib3.PoolManager(timeout=Timeout(total=15))
     health_check_url = f"http://{target_ip}:80/"
 
-    unhealthy = {"status": "unhealthy"}
+    unhealthy = {"status": "UNHEALTHY"}
 
     print("attempting to connect to health check URL " + health_check_url)
-    response = http_client.request("GET", health_check_url)
+
+    try:
+        response = http_client.request("GET", health_check_url)
+
+    except HTTPError as exc:
+        print(f"failed to connect: {exc}")
+        return unhealthy
 
     if not response:
         return unhealthy
 
-    print(response)
+    # print(response.data.decode())
     status_code = response.status
 
     if status_code == 200:
-        return {"status": "healthy"}
+        return {"status": "HEALTHY"}
 
     return unhealthy
 

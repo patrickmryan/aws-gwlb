@@ -241,32 +241,13 @@ def lambda_handler(event, context):
         )
         network_interfaces[device_index] = eni
 
-    # register the data interface with the GWLB
-    # elb_client = boto3.client("elbv2")
-    # geneve_port = 6081
-
     target_index = next(
         (index for index, config in enumerate(network_configs) if config["IsTarget"]),
         None,
     )
 
-    # tg_arn = os.environ["TARGET_GROUP_ARN"]
     target_eni = network_interfaces[target_index]
     target_ip = target_eni["PrivateIpAddress"]
-
-    # try:
-    #     print(
-    #         f"registering eth{target_index}, {target_ip}:{geneve_port} with target group {tg_arn}"
-    #     )
-    #     response = elb_client.register_targets(
-    #         TargetGroupArn=tg_arn, Targets=[{"Id": target_ip, "Port": geneve_port}]
-    #     )
-    #     print("success")
-    # except ClientError as e:
-    #     print(e)
-    #     print(f"Error registering IP : {target_ip} to {tg_arn}. abandoning instance.")
-
-    #     return {**event_detail, "status": "FAILED"}
 
     # record the target IP in a tag on the instance. we'll need the info
     # when the instance terminates.
@@ -275,7 +256,6 @@ def lambda_handler(event, context):
     )
 
     return {
-        # **event_detail,
         "target_ip": target_ip,
         "interfaces_status": "SUCCEEDED",
     }
