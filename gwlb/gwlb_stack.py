@@ -808,7 +808,7 @@ echo
                     ]
                 },
             },
-            # result_path="$.abandon_lifecycle_action",
+            result_path="$.abandon_lifecycle_action",
         )
 
         check_health_lambda = _lambda.Function(
@@ -864,6 +864,7 @@ echo
                     }
                 ],
             },
+            result_path="$.registered_target_ip",
         )
 
         wait_and_recheck = sfn.Wait(
@@ -884,19 +885,14 @@ echo
                 "HEALTHY",
             ),
             # register target IP with target group only after ensuring the instance is healthy
-            # register_target_ip_task,
-            continue_instance_task,
+            register_target_ip_task,
         )
-
-        # SHOULD BE register IP, then continue
-        # but seems to only work if do continue, then register IP. Weird.
 
         wait_and_recheck.next(check_health_task)
         check_health_task.next(checked_health_choice)
 
-        continue_instance_task.next(register_target_ip_task)
-
-        register_target_ip_task.next(sfn.Pass(self, "Succeeded"))
+        register_target_ip_task.next(continue_instance_task)
+        continue_instance_task.next(sfn.Pass(self, "Succeeded"))
         abandon_instance_task.next(sfn.Fail(self, "Failed"))
 
         state_machine = sfn.StateMachine(
