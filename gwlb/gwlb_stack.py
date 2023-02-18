@@ -785,8 +785,7 @@ echo
                     ]
                 },
             },
-            output_path="$"
-            # result_path="$.continue_lifecycle_action",
+            result_path="$.continue_lifecycle_action",
         )
 
         abandon_instance_task = sfn_tasks.CallAwsService(
@@ -865,7 +864,6 @@ echo
                     }
                 ],
             },
-            output_path="$",
         )
 
         wait_and_recheck = sfn.Wait(
@@ -885,18 +883,24 @@ echo
                 sfn.JsonPath.string_at("$.health_status.status"),
                 "HEALTHY",
             ),
+            # register target IP with target group only after ensuring the instance is healthy
             register_target_ip_task,
         )
 
         wait_and_recheck.next(check_health_task)
         check_health_task.next(checked_health_choice)
 
+        # stupid_wait = sfn.Wait(
+        #     self, "StupdWait", time=sfn.WaitTime.duration(Duration.seconds(2))
+        # )
+
+        # register_target_ip_task.next(stupid_wait)
+        # stupid_wait.next(continue_instance_task)
+        ### temporarily disabled
         register_target_ip_task.next(continue_instance_task)
+
         continue_instance_task.next(sfn.Pass(self, "Succeeded"))
-
         abandon_instance_task.next(sfn.Fail(self, "Failed"))
-
-        # register ENI with target group toward the end
 
         state_machine = sfn.StateMachine(
             self, "StateMachine", definition=start_state, timeout=Duration.hours(1)
