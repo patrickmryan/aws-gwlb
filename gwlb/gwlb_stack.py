@@ -4,7 +4,6 @@
 
 from os.path import join
 import json
-from datetime import datetime, timezone
 
 from aws_cdk import (
     Duration,
@@ -146,7 +145,8 @@ class GwlbStack(Stack):
             )
             iam.PermissionsBoundary.of(self).apply(policy)
 
-        iam_prefix = "TESTNetwork"
+        # should get this from a context variable
+        self.iam_prefix = "Network"
 
         # apply tags to everything in the stack
         app_tags = self.node.try_get_context("Tags") or {}
@@ -243,7 +243,7 @@ echo
         instance_role = iam.Role(
             self,
             resource_name,
-            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+            role_name=f"{self.iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name(
@@ -256,20 +256,6 @@ echo
                 #     "CloudWatchAgentServerPolicy"
                 # ),
             ],
-            # inline_policies={
-            #     "logretention": iam.PolicyDocument(
-            #         assign_sids=True,
-            #         statements=[
-            #             iam.PolicyStatement(
-            #                 actions=[
-            #                     "logs:PutRetentionPolicy",
-            #                 ],
-            #                 effect=iam.Effect.ALLOW,
-            #                 resources=["*"],
-            #             ),
-            #         ],
-            #     )
-            # },
         )
 
         launch_template = ec2.LaunchTemplate(
@@ -285,7 +271,6 @@ echo
                     volume=ec2.BlockDeviceVolume.ebs(40, delete_on_termination=True),
                 )
             ],
-            # key_name=key_name,    # don't need this. SSM console is enabled.
             role=instance_role,
             security_group=management_sg,
             user_data=user_data,
@@ -303,7 +288,7 @@ echo
         log_retention_role = iam.Role(
             self,
             resource_name,
-            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+            role_name=f"{self.iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=lambda_principal,
             managed_policies=[
                 basic_lambda_policy,
@@ -337,7 +322,7 @@ echo
         service_role = iam.Role(
             self,
             resource_name,
-            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+            role_name=f"{self.iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=lambda_principal,
             managed_policies=[
                 basic_lambda_policy,
@@ -419,13 +404,12 @@ echo
             resource_type="Custom::RetrieveAttributes",
             service_token=vpce_service_lambda.function_arn,
             properties={
-                "FunctionName": iam_prefix + resource_name,
+                "FunctionName": self.iam_prefix + resource_name,
                 "VpceServiceId": gw_endpoint_service.ref,
             },
         )
 
         # create the VPC endpoints
-
         service_name = retrieve_vpce_service_name.get_att_string("ServiceName")
         vpc_endpoints = {}
         for az in self.vpc.availability_zones:
@@ -649,7 +633,7 @@ echo
         flow_log_role = iam.Role(
             self,
             resource_name,
-            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+            role_name=f"{self.iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=iam.ServicePrincipal("vpc-flow-logs.amazonaws.com"),
             inline_policies={
                 "logs": iam.PolicyDocument(
@@ -677,7 +661,7 @@ echo
         lifecycle_hook_role = iam.Role(
             self,
             resource_name,
-            role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+            role_name=f"{self.iam_prefix}-{resource_name}-{self.stack_name}",
             assumed_by=lambda_principal,
             managed_policies=managed_policies,
             inline_policies={
@@ -864,6 +848,7 @@ echo
                     }
                 ],
             },
+            # seemingly superfluous result_path. without this, the function drops all output.
             result_path="$.registered_target_ip",
         )
 
@@ -900,7 +885,6 @@ echo
         )
 
         # Now set up the lifecycle hooks for launching and terminating events.
-
         launching_rule = self.add_lifecycle_hook(
             construct_id="Launching",
             asg=asg,
@@ -957,7 +941,7 @@ echo
             instance_role = iam.Role(
                 self,
                 resource_name,
-                role_name=f"{iam_prefix}-{resource_name}-{self.stack_name}",
+                role_name=f"{self.iam_prefix}-{resource_name}-{self.stack_name}",
                 assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
                 managed_policies=[
                     iam.ManagedPolicy.from_aws_managed_policy_name(
@@ -1045,8 +1029,7 @@ echo
                 ),
             },
             physical_resource_id=cr.PhysicalResourceId.of(
-                construct_id
-                + "PutHookSetting"  # + datetime.now(timezone.utc).isoformat()
+                construct_id + "PutHookSetting"
             ),
         )
 
@@ -1058,19 +1041,15 @@ echo
                 "LifecycleHookName": lifecycle_hook_name,
             },
             physical_resource_id=cr.PhysicalResourceId.of(
-                # lifecycle_hook_name
-                construct_id
-                + "DeleteHookSetting"
-                # + datetime.now(timezone.utc).isoformat()
+                construct_id + "DeleteHookSetting"
             ),
         )
 
-        iam_prefix = "Network"
+        # iam_prefix = "Network"
         resource_name = construct_id + "HookCustomResource"
         hook_resource = cr.AwsCustomResource(
             self,
             resource_name,
-            # function_name=iam_prefix+resource_name,
             on_create=put_hook_sdk_call,
             on_update=put_hook_sdk_call,  # update just does the same thing as create.
             on_delete=delete_hook_sdk_call,
