@@ -796,6 +796,13 @@ echo
             result_path="$.abandon_lifecycle_action",
         )
 
+        # We set the SFN task timeout to be less than the timeout on
+        # the lambda function. We want to use the native retry capability
+        # to handle the States.Timeout condition.
+        # Once the health check succeeds, the task will exit normally
+        # and continue to the next state.
+
+        health_check_timeout = 10
         check_health_lambda = _lambda.Function(
             self,
             "CheckHealth",
@@ -803,7 +810,7 @@ echo
             handler="check_health.lambda_handler",
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
-            timeout=Duration.seconds(10),
+            timeout=Duration.seconds(health_check_timeout),
             **lambda_settings,
         )
 
@@ -813,12 +820,13 @@ echo
             "CheckHealthTask",
             lambda_function=check_health_lambda,
             payload=sfn.TaskInput.from_json_path_at("$.added_interfaces"),
-            result_path="$.health_status",
-            result_selector={"status.$": "$.Payload.status"},
+            timeout=Duration.seconds(health_check_timeout - 2),
+            # result_path="$.health_status",
+            # result_selector={"status.$": "$.Payload.status"},
         )
         check_health_task.add_retry(
             backoff_rate=1.0,
-            interval=Duration.seconds(15),
+            interval=Duration.seconds(5),
             max_attempts=10,
             errors=["States.Timeout"],
         )

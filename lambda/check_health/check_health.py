@@ -1,8 +1,9 @@
 import sys
 import json
 import urllib3
+import time
 from urllib3.util import Timeout
-from urllib3.exceptions import RequestError, HTTPError
+from urllib3.exceptions import HTTPError
 
 
 def lambda_handler(event, context):
@@ -12,42 +13,43 @@ def lambda_handler(event, context):
     target_ip = event["target_ip"]
 
     http_client = urllib3.PoolManager(
-        # timeout=Timeout(total=15)
-        # let the lambda timeout if the target is unresponsive
-        timeout=Timeout(total=(context.get_remaining_time_in_millis() * 1000) + 10),
-        retries=None,
+        timeout=Timeout(total=15),
     )
     health_check_url = f"http://{target_ip}:80/"
 
-    unhealthy = {"status": "UNHEALTHY"}
+    while True:
+        # keep trying.  let the lambda timeout if the target is unresponsive
+        print("attempting to connect to health check URL " + health_check_url)
 
-    print("attempting to connect to health check URL " + health_check_url)
+        wait_and_try_again = False
+        response = None
 
-    try:
-        response = http_client.request(
-            "GET",
-            health_check_url,
-            timeout=Timeout(total=(context.get_remaining_time_in_millis() * 1000) + 10),
-            retries=None,
-        )
+        try:
+            response = http_client.request(
+                "GET",
+                health_check_url,
+                timeout=Timeout(
+                    total=(context.get_remaining_time_in_millis() * 1000) + 10
+                ),
+                retries=None,
+            )
 
-    except HTTPError as exc:
-        print(f"failed to connect: {exc}")
-        # raise ValueError(unhealthy)
-        return unhealthy
+        except HTTPError as exc:
+            print(f"failed to connect: {exc}")
+            wait_and_try_again = True
 
-    if not response:
-        # raise ValueError(unhealthy)
-        return unhealthy
+        if not response:
+            wait_and_try_again = True
 
-    # print(response.data.decode())
-    status_code = response.status
+        if wait_and_try_again:
+            time.sleep(5)
+            continue
 
-    if status_code == 200:
-        return {"status": "HEALTHY"}
+        status_code = response.status
 
-    # return unhealthy
-    raise ValueError(unhealthy)
+        if status_code == 200:
+            return {"status": "HEALTHY"}
+        # do something if the status code != 200
 
 
 if __name__ == "__main__":
