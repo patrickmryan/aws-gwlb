@@ -11,7 +11,12 @@ def lambda_handler(event, context):
 
     target_ip = event["target_ip"]
 
-    http_client = urllib3.PoolManager(timeout=Timeout(total=15))
+    http_client = urllib3.PoolManager(
+        # timeout=Timeout(total=15)
+        # let the lambda timeout if the target is unresponsive
+        timeout=Timeout(total=(context.get_remaining_time_in_millis() * 1000) + 10),
+        retries=None,
+    )
     health_check_url = f"http://{target_ip}:80/"
 
     unhealthy = {"status": "UNHEALTHY"}
@@ -19,13 +24,20 @@ def lambda_handler(event, context):
     print("attempting to connect to health check URL " + health_check_url)
 
     try:
-        response = http_client.request("GET", health_check_url)
+        response = http_client.request(
+            "GET",
+            health_check_url,
+            timeout=Timeout(total=(context.get_remaining_time_in_millis() * 1000) + 10),
+            retries=None,
+        )
 
     except HTTPError as exc:
         print(f"failed to connect: {exc}")
+        # raise ValueError(unhealthy)
         return unhealthy
 
     if not response:
+        # raise ValueError(unhealthy)
         return unhealthy
 
     # print(response.data.decode())
@@ -34,7 +46,8 @@ def lambda_handler(event, context):
     if status_code == 200:
         return {"status": "HEALTHY"}
 
-    return unhealthy
+    # return unhealthy
+    raise ValueError(unhealthy)
 
 
 if __name__ == "__main__":

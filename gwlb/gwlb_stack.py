@@ -315,7 +315,7 @@ echo
             "log_retention": logs.RetentionDays.ONE_WEEK,
             "log_retention_role": log_retention_role,
             "runtime": python_runtime,
-            "timeout": Duration.seconds(60),
+            # "timeout": Duration.seconds(60),
         }
 
         resource_name = "VpceServiceLambdaExecutionRole"
@@ -725,6 +725,7 @@ echo
                 "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
                 "TARGET_GROUP_ARN": target_group.ref,
             },
+            timeout=Duration.seconds(60),
             **lambda_settings,
         )
 
@@ -802,9 +803,11 @@ echo
             handler="check_health.lambda_handler",
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
+            timeout=Duration.seconds(10),
             **lambda_settings,
         )
 
+        # https://docs.aws.amazon.com/step-functions/latest/dg/connect-lambda.html
         check_health_task = sfn_tasks.LambdaInvoke(
             self,
             "CheckHealthTask",
@@ -813,24 +816,32 @@ echo
             result_path="$.health_status",
             result_selector={"status.$": "$.Payload.status"},
         )
-
-        added_interfaces_choice = sfn.Choice(self, "AddedInterfaces?")
-        added_interfaces_choice.when(
-            sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
-                "FAILED",
-            ),
-            abandon_instance_task,
-        )
-        added_interfaces_choice.when(
-            sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
-                "SUCCEEDED",
-            ),
-            check_health_task,
+        check_health_task.add_retry(
+            backoff_rate=1.0,
+            interval=Duration.seconds(15),
+            max_attempts=10,
+            errors=["States.Timeout"],
         )
 
-        add_interfaces_task.next(added_interfaces_choice)
+        # added_interfaces_choice = sfn.Choice(self, "AddedInterfaces?")
+        # added_interfaces_choice.when(
+        #     sfn.Condition.string_equals(
+        #         sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
+        #         "FAILED",
+        #     ),
+        #     abandon_instance_task,
+        # )
+        # added_interfaces_choice.when(
+        #     sfn.Condition.string_equals(
+        #         sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
+        #         "SUCCEEDED",
+        #     ),
+        #     check_health_task,
+        # )
+        #
+        # add_interfaces_task.next(added_interfaces_choice)
+
+        add_interfaces_task.next(check_health_task)
 
         register_target_ip_task = sfn_tasks.CallAwsService(
             self,
@@ -852,29 +863,31 @@ echo
             result_path="$.registered_target_ip",
         )
 
-        wait_and_recheck = sfn.Wait(
-            self, "WaitAndRecheck", time=sfn.WaitTime.duration(Duration.seconds(30))
-        )
+        check_health_task.next(register_target_ip_task)
 
-        checked_health_choice = sfn.Choice(self, "Healthy?")
-        checked_health_choice.when(
-            sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.health_status.status"),
-                "UNHEALTHY",
-            ),
-            wait_and_recheck,
-        )
-        checked_health_choice.when(
-            sfn.Condition.string_equals(
-                sfn.JsonPath.string_at("$.health_status.status"),
-                "HEALTHY",
-            ),
-            # register target IP with target group only after ensuring the instance is healthy
-            register_target_ip_task,
-        )
+        # wait_and_recheck = sfn.Wait(
+        #     self, "WaitAndRecheck", time=sfn.WaitTime.duration(Duration.seconds(30))
+        # )
 
-        wait_and_recheck.next(check_health_task)
-        check_health_task.next(checked_health_choice)
+        # checked_health_choice = sfn.Choice(self, "Healthy?")
+        # checked_health_choice.when(
+        #     sfn.Condition.string_equals(
+        #         sfn.JsonPath.string_at("$.health_status.status"),
+        #         "UNHEALTHY",
+        #     ),
+        #     wait_and_recheck,
+        # )
+        # checked_health_choice.when(
+        #     sfn.Condition.string_equals(
+        #         sfn.JsonPath.string_at("$.health_status.status"),
+        #         "HEALTHY",
+        #     ),
+        #     # register target IP with target group only after ensuring the instance is healthy
+        #     register_target_ip_task,
+        # )
+
+        # wait_and_recheck.next(check_health_task)
+        # check_health_task.next(checked_health_choice)
 
         register_target_ip_task.next(continue_instance_task)
         continue_instance_task.next(sfn.Pass(self, "Succeeded"))
@@ -892,7 +905,10 @@ echo
             asg_arn=asg_arn,
             lifecycle_hook_role=lifecycle_hook_role,
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
-            lambda_settings=lambda_settings,
+            lambda_settings={
+                **lambda_settings,
+                "timeout": Duration.seconds(60),
+            },
             lambda_handler="launching_hook.lambda_handler",
             lambda_env={
                 "TARGET_GROUP_ARN": target_group.ref,
@@ -917,7 +933,10 @@ echo
             asg_arn=asg_arn,
             lifecycle_hook_role=lifecycle_hook_role,
             lambda_code=_lambda.Code.from_asset(join(lambda_root, "terminating_hook")),
-            lambda_settings=lambda_settings,
+            lambda_settings={
+                **lambda_settings,
+                "timeout": Duration.seconds(60),
+            },
             lambda_handler="terminating_hook.lambda_handler",
             lambda_env={"TARGET_GROUP_ARN": target_group.ref},
             vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
