@@ -1046,6 +1046,8 @@ echo
         # event_bus = events.EventBus.from_event_bus_name(self, "DefaultBus", "default")
         # test_state_machine.grant_execution(launching_rule)
 
+        launching_rule.add_target(events_targets.SfnStateMachine(test_state_machine))
+
     def add_lifecycle_hook(
         self,
         construct_id=None,
