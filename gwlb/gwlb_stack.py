@@ -1033,14 +1033,17 @@ echo
             # result_selector={"status.$": "$.Payload.status"},
         )
 
-        start_state = sfn.Pass(self, "TestStartState")
-        start_state.next(echo_task)
+        # start_state = sfn.Pass(self, "TestStartState")
+        # start_state.next(echo_task)
         echo_task.next(sfn.Pass(self, "TestSucceeded"))
 
         test_state_machine = sfn.StateMachine(
             self,
             "TestStateMachine",
-            definition_body=sfn.DefinitionBody.from_chainable(start_state),
+            definition_body=sfn.DefinitionBody.from_chainable(
+                echo_task
+                # start_state
+            ),
             timeout=Duration.hours(1),
         )
         # event_bus = events.EventBus.from_event_bus_name(self, "DefaultBus", "default")
