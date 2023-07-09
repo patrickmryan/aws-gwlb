@@ -725,7 +725,6 @@ echo
 
         # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_stepfunctions/Choice.html
         # https://docs.aws.amazon.com/step-functions/latest/dg/input-output-inputpath-params.html
-        start_state = sfn.Pass(self, "StartState")
 
         add_interfaces_task = sfn_tasks.LambdaInvoke(
             self,
@@ -737,7 +736,6 @@ echo
                 "interfaces_status.$": "$.Payload.interfaces_status",
             },
         )
-        start_state.next(add_interfaces_task)
 
         # add API task for complete_hook
         # add choice task for success/failure
@@ -827,24 +825,6 @@ echo
             errors=["States.Timeout"],
         )
 
-        # added_interfaces_choice = sfn.Choice(self, "AddedInterfaces?")
-        # added_interfaces_choice.when(
-        #     sfn.Condition.string_equals(
-        #         sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
-        #         "FAILED",
-        #     ),
-        #     abandon_instance_task,
-        # )
-        # added_interfaces_choice.when(
-        #     sfn.Condition.string_equals(
-        #         sfn.JsonPath.string_at("$.added_interfaces.interfaces_status"),
-        #         "SUCCEEDED",
-        #     ),
-        #     check_health_task,
-        # )
-        #
-        # add_interfaces_task.next(added_interfaces_choice)
-
         add_interfaces_task.next(check_health_task)
 
         register_target_ip_task = sfn_tasks.CallAwsService(
@@ -868,62 +848,25 @@ echo
         )
 
         check_health_task.next(register_target_ip_task)
-
-        # wait_and_recheck = sfn.Wait(
-        #     self, "WaitAndRecheck", time=sfn.WaitTime.duration(Duration.seconds(30))
-        # )
-
-        # checked_health_choice = sfn.Choice(self, "Healthy?")
-        # checked_health_choice.when(
-        #     sfn.Condition.string_equals(
-        #         sfn.JsonPath.string_at("$.health_status.status"),
-        #         "UNHEALTHY",
-        #     ),
-        #     wait_and_recheck,
-        # )
-        # checked_health_choice.when(
-        #     sfn.Condition.string_equals(
-        #         sfn.JsonPath.string_at("$.health_status.status"),
-        #         "HEALTHY",
-        #     ),
-        #     # register target IP with target group only after ensuring the instance is healthy
-        #     register_target_ip_task,
-        # )
-
-        # wait_and_recheck.next(check_health_task)
-        # check_health_task.next(checked_health_choice)
-
         register_target_ip_task.next(continue_instance_task)
         continue_instance_task.next(sfn.Pass(self, "Succeeded"))
         abandon_instance_task.next(sfn.Fail(self, "Failed"))
 
-        state_machine = sfn.StateMachine(
+        geneve_state_machine = sfn.StateMachine(
             self,
             "ConfigureGeneveInstance",
-            # definition=start_state,
-            definition_body=sfn.DefinitionBody.from_chainable(start_state),
+            definition_body=sfn.DefinitionBody.from_chainable(add_interfaces_task),
             timeout=Duration.hours(1),
         )
 
         # Now set up the lifecycle hooks for launching and terminating events.
-        launching_rule = self.add_lifecycle_hook(
+
+        launching_rule = self.add_lifecycle_hook_sfn(
             construct_id="Launching",
             asg=asg,
             asg_name=asg_name,
             asg_arn=asg_arn,
-            lifecycle_hook_role=lifecycle_hook_role,
-            lambda_code=_lambda.Code.from_asset(join(lambda_root, "launching_hook")),
-            lambda_settings={
-                **lambda_settings,
-                "timeout": Duration.seconds(60),
-            },
-            lambda_handler="launching_hook.lambda_handler",
-            lambda_env={
-                "TARGET_GROUP_ARN": target_group.ref,
-                "NETWORK_CONFIGURATION_SSM_PARAM": network_ssm_param.parameter_name,
-                "STATE_MACHINE_ARN": state_machine.state_machine_arn,
-            },
-            vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
+            state_machine=geneve_state_machine,
             lifecycle_transition="autoscaling:EC2_INSTANCE_LAUNCHING",
             default_result="ABANDON",
         )
@@ -934,7 +877,7 @@ echo
         # the launch hook resource should not execute until AFTER the ASG been deployed
         # launch_hook_resource.node.add_dependency(asg)
 
-        terminating_rule = self.add_lifecycle_hook(
+        terminating_rule = self.add_lifecycle_hook_lambda(
             construct_id="Terminating",
             asg=asg,
             asg_name=asg_name,
@@ -1008,58 +951,104 @@ echo
             )
             Tags.of(endpoint).add("Name", f"{name}-{self.stack_name}")
 
-        # testing stuff
-        echo_lambda = _lambda.Function(
-            self,
-            "Echo",
-            code=_lambda.Code.from_asset(join(lambda_root, "echo")),
-            handler="echo.lambda_handler",
-            vpc=self.vpc,
-            vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
-            timeout=Duration.seconds(health_check_timeout),
-            **lambda_settings,
-        )
+    def add_lifecycle_hook_sfn(
+        self,
+        construct_id=None,
+        asg=None,
+        asg_name=None,
+        asg_arn=None,
+        state_machine=None,
+        lifecycle_transition=None,
+        default_result=None,
+    ):
+        # https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.custom_resources/AwsCustomResource.html
+        # https://medium.com/@imageryan/using-awscustomresource-to-fill-the-gaps-in-aws-cdk-351c8423fa80
 
-        # https://docs.aws.amazon.com/step-functions/latest/dg/connect-lambda.html
-        echo_task = sfn_tasks.LambdaInvoke(
-            self,
-            "EchoTask",
-            lambda_function=echo_lambda,
-            # payload=sfn.TaskInput.from_json_path_at("$.added_interfaces"),
-            task_timeout=sfn.Timeout.duration(
-                Duration.seconds(health_check_timeout - 2)
+        lifecycle_hook_name = construct_id + "Hook"
+
+        put_hook_sdk_call = cr.AwsSdkCall(
+            service="AutoScaling",
+            action="putLifecycleHook",
+            parameters={
+                "AutoScalingGroupName": asg_name,
+                "LifecycleHookName": lifecycle_hook_name,
+                "DefaultResult": default_result,
+                "HeartbeatTimeout": 240,
+                "LifecycleTransition": lifecycle_transition,
+                "NotificationMetadata": json.dumps(
+                    {"message": "here is some cool metadata"}
+                ),
+            },
+            physical_resource_id=cr.PhysicalResourceId.of(
+                construct_id + "PutHookSetting"
             ),
-            # result_path="$.health_status",
-            # result_selector={"status.$": "$.Payload.status"},
         )
 
-        # start_state = sfn.Pass(self, "TestStartState")
-        # start_state.next(echo_task)
-        echo_task.next(sfn.Pass(self, "TestSucceeded"))
-
-        test_state_machine = sfn.StateMachine(
-            self,
-            "TestStateMachine",
-            definition_body=sfn.DefinitionBody.from_chainable(
-                echo_task
-                # start_state
+        delete_hook_sdk_call = cr.AwsSdkCall(
+            service="AutoScaling",
+            action="deleteLifecycleHook",
+            parameters={
+                "AutoScalingGroupName": asg_name,
+                "LifecycleHookName": lifecycle_hook_name,
+            },
+            physical_resource_id=cr.PhysicalResourceId.of(
+                construct_id + "DeleteHookSetting"
             ),
-            timeout=Duration.hours(1),
         )
-        # event_bus = events.EventBus.from_event_bus_name(self, "DefaultBus", "default")
-        # test_state_machine.grant_execution(launching_rule)
 
-        launching_rule.add_target(
+        resource_name = construct_id + "HookCustomResource"
+        hook_resource = cr.AwsCustomResource(
+            self,
+            resource_name,
+            on_create=put_hook_sdk_call,
+            on_update=put_hook_sdk_call,  # update just does the same thing as create.
+            on_delete=delete_hook_sdk_call,
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(
+                        effect=iam.Effect.ALLOW,
+                        actions=[
+                            "autoscaling:PutLifecycleHook",
+                            "autoscaling:DeleteLifecycleHook",
+                        ],
+                        resources=[asg_arn],
+                    )
+                ]
+            ),
+        )
+
+        rule = events.Rule(
+            self,
+            construct_id + "HookRuleSfn",
+            event_pattern=events.EventPattern(
+                source=["aws.autoscaling"],
+                detail={
+                    "LifecycleTransition": [lifecycle_transition],
+                    "AutoScalingGroupName": [asg_name],
+                },
+            ),
+        )
+
+        rule.add_target(
             events_targets.SfnStateMachine(
-                test_state_machine,
+                state_machine,
                 input=events.RuleTargetInput.from_object(
-                    # {".lifecycle_hook_details": "$.detail"}
                     {"lifecycle_hook_details": events.EventField.from_path("$.detail")}
                 ),
             )
         )
 
-    def add_lifecycle_hook(
+        # Make sure the launching rule and lambda are created before the ASG.
+        # Bad things can happen if the ASG starts spinning up instances before the
+        # lifecycle hook lambdas and rules are deployed.
+        asg.node.add_dependency(rule)
+
+        # the launch hook resource should not execute until AFTER the ASG been deployed
+        hook_resource.node.add_dependency(asg)
+
+        return rule
+
+    def add_lifecycle_hook_lambda(
         self,
         construct_id=None,
         asg=None,
@@ -1098,7 +1087,7 @@ echo
                 "AutoScalingGroupName": asg_name,
                 "LifecycleHookName": lifecycle_hook_name,
                 "DefaultResult": default_result,
-                "HeartbeatTimeout": 120,
+                "HeartbeatTimeout": 240,
                 "LifecycleTransition": lifecycle_transition,
                 "NotificationMetadata": json.dumps(
                     {"message": "here is some cool metadata"}
@@ -1121,7 +1110,6 @@ echo
             ),
         )
 
-        # iam_prefix = "Network"
         resource_name = construct_id + "HookCustomResource"
         hook_resource = cr.AwsCustomResource(
             self,
@@ -1191,20 +1179,3 @@ echo
         )
 
         return test_instance
-
-    def flow_log_for_subnets(
-        self, contruct_name="", subnets=[], log_group=None, flow_log_role=None
-    ):
-        # https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html#flow-log-records
-        for n, subnet in enumerate(subnets):
-            ec2.FlowLog(
-                self,
-                f"{contruct_name}{n}",
-                resource_type=ec2.FlowLogResourceType.from_subnet(subnet),
-                destination=ec2.FlowLogDestination.to_cloud_watch_logs(
-                    log_group, flow_log_role
-                ),
-                traffic_type=ec2.FlowLogTrafficType.ALL,
-                max_aggregation_interval=ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
-                # log_format
-            )
