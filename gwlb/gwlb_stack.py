@@ -899,7 +899,7 @@ echo
 
         state_machine = sfn.StateMachine(
             self,
-            "StateMachine",
+            "ConfigureGeneveInstance",
             # definition=start_state,
             definition_body=sfn.DefinitionBody.from_chainable(start_state),
             timeout=Duration.hours(1),
@@ -1049,7 +1049,15 @@ echo
         # event_bus = events.EventBus.from_event_bus_name(self, "DefaultBus", "default")
         # test_state_machine.grant_execution(launching_rule)
 
-        launching_rule.add_target(events_targets.SfnStateMachine(test_state_machine))
+        launching_rule.add_target(
+            events_targets.SfnStateMachine(
+                test_state_machine,
+                input=events.RuleTargetInput.from_object(
+                    # {".lifecycle_hook_details": "$.detail"}
+                    {"lifecycle_hook_details": events.EventField.from_path("$.detail")}
+                ),
+            )
+        )
 
     def add_lifecycle_hook(
         self,
