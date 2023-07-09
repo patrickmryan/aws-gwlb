@@ -37,7 +37,6 @@ class SecurityVpcType:  # this really need to be a new construct
         return None
 
     def subnet_configurations(self, subnet_cidr_mask=None):
-
         return [
             ec2.SubnetConfiguration(
                 name="trusted",
@@ -58,12 +57,10 @@ class SecurityVpcType:  # this really need to be a new construct
         tg_attachment=None,
         router_id=None,
     ):
-
         subnets = (self.vpc.select_subnets(subnet_group_name=subnet_name)).subnets
 
         for subnet_index, subnet in enumerate(subnets):
             for range_index, cidr_range in enumerate(cidr_ranges):
-
                 # Have to do this via CfnRoute instead of subnet.add_route
                 # because CDK seems not to know that it can't create
                 # a route back to the TG until the attachment is available.
@@ -80,7 +77,6 @@ class SecurityVpcType:  # this really need to be a new construct
 
     @staticmethod
     def for_type_named(vpc_type_param, stack=None):
-
         if vpc_type_param == "NorthSouth":
             return NorthSouth(stack=stack)
 
@@ -202,9 +198,8 @@ class GwlbStack(Stack):
         management_sg.connections.allow_from(intra_vpc, ec2.Port.all_traffic())
         Tags.of(management_sg).add("ROLE", "management")
 
-        ami = ec2.MachineImage.latest_amazon_linux(
-            generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
-        )
+        ami = ec2.MachineImage.latest_amazon_linux2()
+        # generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
 
         user_data = ec2.UserData.for_linux()
 
@@ -522,7 +517,6 @@ echo
         Tags.of(edge_route_table).add("Name", "EdgeRouteTable")
 
         for az, vpce in vpc_endpoints.items():
-
             subnets = (
                 self.vpc.select_subnets(
                     subnet_group_name="trusted", availability_zones=[az]
@@ -820,7 +814,9 @@ echo
             "CheckHealthTask",
             lambda_function=check_health_lambda,
             payload=sfn.TaskInput.from_json_path_at("$.added_interfaces"),
-            timeout=Duration.seconds(health_check_timeout - 2),
+            task_timeout=sfn.Timeout.duration(
+                Duration.seconds(health_check_timeout - 2)
+            ),
             # result_path="$.health_status",
             # result_selector={"status.$": "$.Payload.status"},
         )
@@ -902,7 +898,11 @@ echo
         abandon_instance_task.next(sfn.Fail(self, "Failed"))
 
         state_machine = sfn.StateMachine(
-            self, "StateMachine", definition=start_state, timeout=Duration.hours(1)
+            self,
+            "StateMachine",
+            # definition=start_state,
+            definition_body=sfn.DefinitionBody.from_chainable(start_state),
+            timeout=Duration.hours(1),
         )
 
         # Now set up the lifecycle hooks for launching and terminating events.
@@ -963,7 +963,6 @@ echo
         launch_test_instance_param = self.node.try_get_context("LaunchTestInstance")
 
         if launch_test_instance_param:
-
             resource_name = "TestInstanceRole"
             instance_role = iam.Role(
                 self,
@@ -1024,7 +1023,6 @@ echo
         lifecycle_transition=None,
         default_result=None,
     ):
-
         hook_lambda = _lambda.Function(
             self,
             construct_id + "HookLambda",
@@ -1118,7 +1116,6 @@ echo
         return lifecycle_rule
 
     def launch_test_instance(self, vpc_subnets=None, role=None, key_name=None):
-
         optional_params = {}
         if key_name:
             optional_params["key_name"] = key_name
@@ -1128,7 +1125,7 @@ echo
             "TestInstance",
             vpc=self.vpc,
             vpc_subnets=vpc_subnets,
-            machine_image=ec2.MachineImage.latest_amazon_linux(),
+            machine_image=ec2.MachineImage.latest_amazon_linux2(),
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.MICRO
             ),
@@ -1147,7 +1144,6 @@ echo
     def flow_log_for_subnets(
         self, contruct_name="", subnets=[], log_group=None, flow_log_role=None
     ):
-
         # https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html#flow-log-records
         for n, subnet in enumerate(subnets):
             ec2.FlowLog(
