@@ -1008,6 +1008,44 @@ echo
             )
             Tags.of(endpoint).add("Name", f"{name}-{self.stack_name}")
 
+        # testing stuff
+        echo_lambda = _lambda.Function(
+            self,
+            "Echo",
+            code=_lambda.Code.from_asset(join(lambda_root, "echo")),
+            handler="echo.lambda_handler",
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(subnets=lambda_subnets.subnets),
+            timeout=Duration.seconds(health_check_timeout),
+            **lambda_settings,
+        )
+
+        # https://docs.aws.amazon.com/step-functions/latest/dg/connect-lambda.html
+        echo_task = sfn_tasks.LambdaInvoke(
+            self,
+            "EchoTask",
+            lambda_function=echo_lambda,
+            # payload=sfn.TaskInput.from_json_path_at("$.added_interfaces"),
+            task_timeout=sfn.Timeout.duration(
+                Duration.seconds(health_check_timeout - 2)
+            ),
+            # result_path="$.health_status",
+            # result_selector={"status.$": "$.Payload.status"},
+        )
+
+        start_state = sfn.Pass(self, "TestStartState")
+        start_state.next(echo_task)
+        echo_task.next(sfn.Pass(self, "TestSucceeded"))
+
+        test_state_machine = sfn.StateMachine(
+            self,
+            "TestStateMachine",
+            definition_body=sfn.DefinitionBody.from_chainable(start_state),
+            timeout=Duration.hours(1),
+        )
+        # event_bus = events.EventBus.from_event_bus_name(self, "DefaultBus", "default")
+        # test_state_machine.grant_execution(launching_rule)
+
     def add_lifecycle_hook(
         self,
         construct_id=None,
