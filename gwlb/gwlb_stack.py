@@ -817,7 +817,7 @@ echo
             task_timeout=sfn.Timeout.duration(
                 Duration.seconds(health_check_timeout - 2)
             ),
-            # result_path="$.health_status",
+            result_path="$.health_status",
             # result_selector={"status.$": "$.Payload.status"},
         )
         check_health_task.add_retry(
