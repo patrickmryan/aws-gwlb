@@ -30,6 +30,11 @@ from constructs import Construct
 
 
 class SecurityVpcType:  # this really need to be a new construct
+    """
+    Implementation of the Strategy pattern to encapsulate north/south versus east/west
+    VPC configuration and routing.
+    """
+
     def __init__(self, stack=None):
         self.stack = stack
 
@@ -87,6 +92,10 @@ class SecurityVpcType:  # this really need to be a new construct
 
 
 class NorthSouth(SecurityVpcType):
+    """
+    North/South VPC configuration.
+    """
+
     def nat_gateway_provider(self):
         return ec2.NatProvider.gateway()
 
@@ -111,10 +120,18 @@ class NorthSouth(SecurityVpcType):
 
 
 class EastWest(SecurityVpcType):
+    """
+    East/West VPC configuration.
+    """
+
     pass
 
 
 class GwlbStack(Stack):
+    """
+    All the CDK stuff
+    """
+
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 

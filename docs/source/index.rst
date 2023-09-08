@@ -17,6 +17,7 @@ This is an example project for testing Sphinx.
 
    usage
    lambda
+   cdk
 
 
 

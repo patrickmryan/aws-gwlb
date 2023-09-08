@@ -9,17 +9,23 @@
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
-#
-import os
-import sys
-from glob import glob
 
-sys.path.insert(0, "/Users/pmryan/ec/projects/ose/aws-gwlb/lambda")
+import sys
+
+# from glob import glob
+from os.path import join, abspath  # , normpath
+
+root = "../.."
+for dir in ["lambda", "."]:
+    sys.path.insert(0, abspath(join(root, dir)))
+
+# sys.path.insert(0, "/Users/pmryan/ec/projects/ose/aws-gwlb/lambda")
+# sys.path.insert(0, "/Users/pmryan/ec/projects/ose/aws-gwlb/gwlb")
 
 # root="/Users/pmryan/ec/projects/ose/aws-gwlb"
 # for dir in glob(root+"/lambda/*"):
 #     sys.path.insert(0, os.path.abspath(dir))
-# print(sys.path)
+print(sys.path)
 
 # -- Project information -----------------------------------------------------
 
