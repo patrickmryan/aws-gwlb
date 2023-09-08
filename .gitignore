@@ -9,3 +9,5 @@ __pycache__
 .cdk.staging
 cdk.out
 *.pem
+
+docs/build/
