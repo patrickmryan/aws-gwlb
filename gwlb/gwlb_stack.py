@@ -29,7 +29,7 @@ from aws_cdk import (
 from constructs import Construct
 
 
-class SecurityVpcType:  # this really need to be a new construct
+class SecurityVpcType:
     """
     Implementation of the Strategy pattern to encapsulate north/south versus east/west
     VPC configuration and routing.
@@ -216,7 +216,6 @@ class GwlbStack(Stack):
         Tags.of(management_sg).add("ROLE", "management")
 
         ami = ec2.MachineImage.latest_amazon_linux2()
-        # generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2
 
         user_data = ec2.UserData.for_linux()
 

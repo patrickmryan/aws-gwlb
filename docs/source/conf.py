@@ -11,20 +11,12 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
 import sys
-
-# from glob import glob
-from os.path import join, abspath  # , normpath
+from os.path import join, abspath
 
 root = "../.."
 for dir in ["lambda", "."]:
     sys.path.insert(0, abspath(join(root, dir)))
 
-# sys.path.insert(0, "/Users/pmryan/ec/projects/ose/aws-gwlb/lambda")
-# sys.path.insert(0, "/Users/pmryan/ec/projects/ose/aws-gwlb/gwlb")
-
-# root="/Users/pmryan/ec/projects/ose/aws-gwlb"
-# for dir in glob(root+"/lambda/*"):
-#     sys.path.insert(0, os.path.abspath(dir))
 print(sys.path)
 
 # -- Project information -----------------------------------------------------

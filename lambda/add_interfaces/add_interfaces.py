@@ -82,14 +82,12 @@ def create_attach_eni(
 
 
 def create_tags(ec2_client=None, resource_id="", tags={}):
-
     tag_list = [{"Key": key, "Value": value} for key, value in tags.items()]
     response = ec2_client.create_tags(Resources=[resource_id], Tags=tag_list)
     return response
 
 
 def lambda_handler(event, context):
-
     print(json.dumps(event))
     event_detail = event["lifecycle_hook_details"]  # .copy()  # ["detail"]
 
@@ -180,7 +178,6 @@ def lambda_handler(event, context):
 
     # iterate over the list of additional interface. skip the primary interface (index 0)
     for device_index in range(1, len(network_configs)):
-
         config = network_configs[device_index]
         role_value = config[ROLE_KEY]
 
@@ -201,15 +198,16 @@ def lambda_handler(event, context):
         subnet_id = subnets[0]["SubnetId"]
 
         # extract the security groups for this AZ
-
-        response = ec2_client.describe_security_groups(
+        security_groups = []
+        paginator = ec2_client.get_paginator("describe_security_groups")
+        for page in paginator.paginate(
             Filters=[
                 {"Name": "vpc-id", "Values": [vpc_id]},
                 {"Name": "tag-key", "Values": [ROLE_KEY]},
-            ],
-            DryRun=False,
-        )
-        security_groups = response["SecurityGroups"]
+            ]
+        ):
+            security_groups.extend(page["SecurityGroups"])
+
         groups = select_resources_with_tag(
             security_groups, tag_key=ROLE_KEY, tag_value=role_value
         )

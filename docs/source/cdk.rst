@@ -11,13 +11,13 @@ CDK stuff
 ..     :type include_world: bool
 ..     :see: "Describing code in Sphinx" - https://www.sphinx-doc.org/en/master/tutorial/describing-code.html
 
-.. .. automodule:: gwlb.gwlb_stack
-..     :members:
+.. automodule:: gwlb.gwlb_stack
+    :members:
 
-.. autoclass:: gwlb.gwlb_stack.SecurityVpcType
+.. .. autoclass:: gwlb.gwlb_stack.SecurityVpcType
 
-.. autoclass:: gwlb.gwlb_stack.NorthSouth
+.. .. autoclass:: gwlb.gwlb_stack.NorthSouth
 
-.. autoclass:: gwlb.gwlb_stack.EastWest
+.. .. autoclass:: gwlb.gwlb_stack.EastWest
 
-.. autoclass:: gwlb.gwlb_stack.GwlbStack
+.. .. autoclass:: gwlb.gwlb_stack.GwlbStack
