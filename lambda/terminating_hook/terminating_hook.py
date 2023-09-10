@@ -3,8 +3,6 @@ import logging
 import os
 from datetime import datetime
 import boto3
-
-# import botocore
 from botocore.exceptions import ClientError
 
 
@@ -14,7 +12,6 @@ def stringify(o):
 
 
 def lambda_handler(event, context):
-
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
