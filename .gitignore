@@ -11,3 +11,5 @@ cdk.out
 *.pem
 
 docs/build/
+
+.~c9*

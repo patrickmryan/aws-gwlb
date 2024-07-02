@@ -37,7 +37,7 @@
     },
 
     "LaunchTestInstance": true,
-    "NotificationsEmailAddress": "",
+    "NotificationsEmailAddress": "imageryan@gmail.com",
 
     "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
